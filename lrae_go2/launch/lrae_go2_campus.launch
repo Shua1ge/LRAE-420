@@ -1,0 +1,120 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- One-shot launch: Go2 + MID-360 + RL policy + LRAE on the NJUPT Xianlin
+       campus world (~/World/njupt_gazebo_optimized, mounted at /world/njupt).
+
+       Usage (visual):
+         GAZEBO_MODEL_PATH=/world/njupt/models
+         roslaunch lrae_go2 lrae_go2_campus.launch gui:=true
+       The world is a bench copy with 2 ms / 500 Hz physics; the scene model is
+       the original, unmodified.
+
+       Spawn defaults to the library entrance plaza probe from the package's
+       acceptance report: (136.3, -176.7), ground z = 0.26 m, so robot z =
+       0.26 + 0.55.  Do NOT leave z at 0.55: campus ground z ranges 0.01..6.24.
+  -->
+
+  <arg name="world" default="/ws/worlds/njupt/njupt_go2.world"/>
+  <arg name="gui" default="true"/>
+  <arg name="rviz" default="false"
+       doc="Also start RViz (globalMap, exploration path, local path, lidar, TF)."/>
+  <arg name="start_delay" default="15.0"/>
+
+  <!-- Hill summit south of the library plaza: acceptance-report probe
+       hills_5/12 at (173.8, -257.4), ground z 5.30 (a 1 m neighbour probe
+       reads 5.31, so the top is flat).  28 m away the ridge reaches 6.06,
+       34 m away the plaza drops to 0.26 -> a real slope to test. -->
+  <arg name="x" default="173.8" doc="Hill summit x."/>
+  <arg name="y" default="-257.4" doc="Hill summit y."/>
+  <arg name="z" default="5.85" doc="ground z 5.30 + 0.55 stand offset."/>
+
+  <arg name="minrange" default="8.0"
+       doc="Open campus: restore the paper-like rejection radius."/>
+  <arg name="mid360_h_samples" default="625"
+       doc="CPU-ray horizontal samples.  625x32 (default) is the real-sensor
+            density but makes ray casting the RTF bottleneck on the 2.66M-
+            triangle campus; 225x16 gives ~0.7 RTF at reduced cloud density."/>
+  <arg name="mid360_v_samples" default="32"
+       doc="Real MID360 raster is 32 rows.  The transferable configuration
+            relies on neighbourhood surface recovery (below) instead of a
+            denser scan; use 128 only for sim-side debugging."/>
+  <arg name="mid360_sensor_type" default="ray"/>
+  <arg name="mid360_plugin" default="gazebo_ros_lidar"/>
+  <arg name="startup_spin" default="false"
+       doc="Optional startup self-test: slow 360 deg spin.  A 360 deg lidar
+            already covers every azimuth in one frame, and the blind cone /
+            ground annuli are radial geometry, so the spin adds NO mapping
+            coverage - it only exercises yaw control.  Default off."/>
+  <arg name="spin_rate" default="0.6"/>
+  <arg name="spin_duration" default="10.5"/>
+  <arg name="follower_start_delay"
+       default="$(eval arg('start_delay') + (arg('spin_duration') if arg('startup_spin') == 'true' else 0.0))"/>
+  <arg name="fit_min_points" default="4"/>
+  <arg name="fit_radius" default="0.35"/>
+  <arg name="neighbor_recover" default="true"/>
+  <arg name="neighbor_min_points" default="3"/>
+  <arg name="neighbor_radius_cells" default="3"/>
+  <arg name="neighbor_min_eig_ratio" default="0.1"/>
+  <arg name="neighbor_max_z_span" default="0.15"/>
+  <!-- Global map covers spawn +/-150 m; merge writes have no bounds check,
+       so the origin must contain the whole mission area. -->
+  <arg name="map_origin_x" default="23.8"/>
+  <arg name="map_origin_y" default="-407.4"/>
+
+  <include file="$(find go2_description)/launch/go2_stand_walk.launch">
+    <arg name="world" value="$(arg world)"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="use_sensor_head" value="false"/>
+    <arg name="use_nearfield" value="false"/>
+    <arg name="use_mid360" value="true"/>
+    <arg name="use_d435" value="false"/>
+    <arg name="use_filter" value="false"/>
+    <arg name="x" value="$(arg x)"/>
+    <arg name="y" value="$(arg y)"/>
+    <arg name="z" value="$(arg z)"/>
+    <arg name="mid360_h_samples" value="$(arg mid360_h_samples)"/>
+    <arg name="mid360_v_samples" value="$(arg mid360_v_samples)"/>
+    <arg name="mid360_sensor_type" value="$(arg mid360_sensor_type)"/>
+    <arg name="mid360_plugin" value="$(arg mid360_plugin)"/>
+  </include>
+
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="rviz"
+        args="-d $(find lrae_go2)/rviz/lrae_campus.rviz" output="screen"/>
+
+  <node if="$(arg startup_spin)" pkg="lrae_go2" type="startup_spin.py"
+        name="startup_spin" output="screen"
+        launch-prefix="bash -c 'sleep $(arg start_delay); exec $0 $@'">
+    <param name="rate" value="$(arg spin_rate)"/>
+    <param name="duration" value="$(arg spin_duration)"/>
+  </node>
+
+  <!-- Execution-stall monitor: log-only, publishes /stuck for a future
+       recovery node. -->
+  <node pkg="lrae_go2" type="stuck_detector.py" name="stuck_detector"
+        output="screen">
+    <param name="cmd_thr" value="0.15"/>
+    <param name="window" value="5.0"/>
+    <param name="disp_thr" value="0.10"/>
+    <param name="startup_ignore" value="$(eval arg('follower_start_delay') + 5.0)"/>
+  </node>
+
+  <include file="$(find lrae_go2)/launch/lrae_newmine.launch">
+    <arg name="start_delay" value="$(arg follower_start_delay)"/>
+    <arg name="minrange" value="$(arg minrange)"/>
+    <arg name="map_origin_x" value="$(arg map_origin_x)"/>
+    <arg name="map_origin_y" value="$(arg map_origin_y)"/>
+    <!-- Campus: absolute [-20,300] filter would drop everything around the
+         spawn at y=-177; fitplane's own +/-30 m window is enough. -->
+    <arg name="use_ex_range" value="false"/>
+    <!-- Smooth plaza: a 1.0 m fit box with >=4 surface voxels.  Upstream
+         0.25 m / 10 leaves every ground cell unknown on open pavement. -->
+    <arg name="init_free_radius" value="2.1"/>
+    <arg name="fit_min_points" value="$(arg fit_min_points)"/>
+    <arg name="fit_radius" value="$(arg fit_radius)"/>
+    <arg name="neighbor_recover" value="$(arg neighbor_recover)"/>
+    <arg name="neighbor_min_points" value="$(arg neighbor_min_points)"/>
+    <arg name="neighbor_radius_cells" value="$(arg neighbor_radius_cells)"/>
+    <arg name="neighbor_min_eig_ratio" value="$(arg neighbor_min_eig_ratio)"/>
+    <arg name="neighbor_max_z_span" value="$(arg neighbor_max_z_span)"/>
+  </include>
+</launch>

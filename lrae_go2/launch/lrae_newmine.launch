@@ -1,0 +1,233 @@
+<?xml version="1.0"?>
+<launch>
+  <!--
+    LRAE on the Go2 + simulated MID-360.
+
+    Assumes the robot side is already running:
+      roslaunch go2_description go2_stand_walk.launch \
+        world:=/ws/worlds/newmine/NewMine_classic.sdf \
+        use_mid360:=true use_d435:=false use_filter:=false gui:=false
+
+    The robot side provides:
+      /mid360_points      sensor_msgs/PointCloud2, frame lidar_link, 10 Hz
+      /ground_truth/state nav_msgs/Odometry, frame world, child base
+      world -> base TF, /joint_states, /go2/imu, /planning/cmd_vel_raw
+  -->
+
+  <arg name="start_delay" default="15.0"
+       doc="Delay the LRAE velocity follower until the policy has stood up."/>
+  <arg name="cloud_topic" default="/mid360_points"/>
+  <arg name="target_frame" default="world"/>
+  <arg name="map_width" default="1000"
+       doc="Global map cells at 0.3 m/cell; 1000 = 300 m."/>
+  <arg name="map_height" default="1000"/>
+  <arg name="map_origin_x" default="-20.0"/>
+  <arg name="map_origin_y" default="-20.0"/>
+  <arg name="minrange" default="3.0"
+       doc="Ignore centroids whose |dx| and |dy| are both below this.  NewMine
+            tunnels are narrower than the paper's open scenes; 3 m lets the
+            planner use the local corridor frontiers instead of rejecting all
+            of them as too close."/>
+  <arg name="ex_back" default="-20.0"/>
+  <arg name="ex_front" default="300.0"/>
+  <arg name="ex_right" default="-20.0"/>
+  <arg name="ex_left" default="300.0"/>
+  <arg name="init_free_radius" default="0.0"
+       doc="Seed a free disc of this radius around the robot at map init,
+            covering the lidar near-field blind cone (2.1 m)."/>
+  <arg name="neighbor_recover" default="false"/>
+  <arg name="neighbor_min_points" default="3"/>
+  <arg name="neighbor_radius_cells" default="1"/>
+  <arg name="neighbor_min_eig_ratio" default="0.1"/>
+  <arg name="neighbor_max_z_span" default="0.15"/>
+  <arg name="fit_min_points" default="10"/>
+  <arg name="fit_radius" default="0.25"/>
+  <arg name="use_ex_range" default="true"
+       doc="true: absolute world-frame point filter (NewMine).  false: rely on
+            fitplane's own +/-30 m robot-centred window (campus / open sites,
+            where the absolute box would clip most of the scene)."/>
+  <arg name="dir_diff_thre" default="0.1"
+       doc="pathFollower speed gate.  Campus paths sit at a ~0.1 rad lateral
+            offset and 0.1 rad deadband leaves the robot spinning in place."/>
+  <arg name="max_yaw_rate" default="45.0"/>
+  <arg name="yaw_rate_gain" default="7.5"/>
+  <arg name="stop_yaw_rate_gain" default="7.5"/>
+
+  <!-- MID-360 frame adapter.  Keep this unfiltered: fitplane needs ground. -->
+  <node pkg="lrae_go2" type="mid360_to_world.py" name="mid360_to_world"
+        output="screen">
+    <param name="source_topic" value="$(arg cloud_topic)"/>
+    <param name="output_topic" value="/mid360_world"/>
+    <param name="target_frame" value="$(arg target_frame)"/>
+    <param name="tf_timeout" value="0.10"/>
+  </node>
+
+  <!-- Traversability: the local 2.5D support-plane map. -->
+  <node pkg="fitplane" type="Traversibility_mapping"
+        name="Traversibility_mapping" output="screen" required="true">
+    <param name="PointCloud_Map_topic" value="/mid360_world"/>
+    <param name="Grid_Map_topic" value="/grid_map"/>
+    <param name="Plane_Map_topic" value="/plane_map"/>
+    <param name="use_ex_range" value="$(arg use_ex_range)"/>
+    <!-- Absolute world-frame window, wide enough for NewMine.  fitplane's own
+         minrange_ still limits each local map to +/-30 m around the robot. -->
+    <param name="ex_robot_back" value="$(arg ex_back)"/>
+    <param name="ex_robot_front" value="$(arg ex_front)"/>
+    <param name="ex_robot_right" value="$(arg ex_right)"/>
+    <param name="ex_robot_left" value="$(arg ex_left)"/>
+    <!-- Fit-box thresholds: upstream 10 / 0.25 works on rough cave floors;
+         smooth open plazas only put 5-9 surface voxels in a 0.5 m box and
+         every cell would stay unknown.  Campus launch raises the radius and
+         lowers the count. -->
+    <param name="fit_min_points" value="$(arg fit_min_points)"/>
+    <param name="fit_radius" value="$(arg fit_radius)"/>
+    <!-- Experiment C: recover cells whose exact 0.1 m column has no surface
+         by fitting the 3x3 neighbouring cell surfaces (0.3 m ring). -->
+    <param name="neighbor_recover" value="$(arg neighbor_recover)"/>
+    <param name="neighbor_min_points" value="$(arg neighbor_min_points)"/>
+    <param name="neighbor_radius_cells" value="$(arg neighbor_radius_cells)"/>
+    <param name="neighbor_min_eig_ratio" value="$(arg neighbor_min_eig_ratio)"/>
+    <param name="neighbor_max_z_span" value="$(arg neighbor_max_z_span)"/>
+  </node>
+
+  <!-- Merge local plane_OccMap into the global exploration grid. -->
+  <node pkg="lrae_planner" type="exploration_map_merge"
+        name="exploration_map_merge" output="screen">
+    <param name="map_w" value="$(arg map_width)"/>
+    <param name="map_h" value="$(arg map_height)"/>
+    <param name="mapinitox" value="$(arg map_origin_x)"/>
+    <param name="mapinitoy" value="$(arg map_origin_y)"/>
+    <param name="merge_size" value="9.0"/>
+    <param name="init_free_radius" value="$(arg init_free_radius)"/>
+    <param name="safe_obs_dis" value="1.0"/>
+  </node>
+
+  <!-- LRAE global exploration planner. -->
+  <node pkg="lrae_planner" type="lrae_planner_node"
+        name="lrae_planner_node" output="screen">
+    <param name="angle_pen" value="0.45"/>
+    <param name="update_cen_thre" value="6"/>
+    <param name="unknown_num_thre" value="200"/>
+    <!-- 8 m is a compromise between the paper's open-terrain 20 m and the
+         NewMine tunnel scale.  Lower it further for very tight sites. -->
+    <param name="minrange" value="$(arg minrange)"/>
+    <param name="limit_max_square" value="false"/>
+    <param name="use_go_end_nearest" value="false"/>
+    <!-- Narrow-tunnel viewpoint rules: upstream requires exactly 3-4 free
+         8-neighbours and no wall within 0.6 m of a frontier cell; in NewMine
+         both kill every viewpoint once tunnel walls are mapped (measured:
+         0 candidates at the 2026-11-03 10-min stall).  >=2 free neighbours
+         and no clearance ring keep frontier cells eligible. -->
+    <param name="vp_free_neighbors_min" value="2"/>
+    <param name="vp_occ_clear_cells" value="0"/>
+    <!-- Exploration goals closer than this are rejected in favour of the
+         BFS frontier fallback target distance.  Must stay above
+         pathFollower's stopDisThre (0.2) + look-ahead deadband (0.5), but
+         small enough to let the robot push into tunnel mouths. -->
+    <param name="goal_min_dis" value="0.7"/>
+  </node>
+
+  <!-- Short look-ahead goal from the global exploration path. -->
+  <node pkg="gen_local_goal" type="gen_local_goal_node"
+        name="gen_local_goal_node" output="screen">
+    <!-- This node also has a 0.5 m/s "stuck" open-loop publisher on /cmd_vel.
+         Disable it so only pathFollower can command the Go2 policy. -->
+    <remap from="/cmd_vel" to="/cmd_vel_disabled"/>
+  </node>
+
+  <!-- Local collision avoidance on local_traversibility_ponit_cloud. -->
+  <node pkg="local_planner" type="localPlanner" name="localPlanner"
+        output="screen" required="true">
+    <remap from="/state_estimation" to="/ground_truth/state"/>
+    <remap from="/way_point" to="/look_ahead_goal"/>
+    <remap from="/terrain_map" to="/local_traversibility_ponit_cloud"/>
+
+    <param name="pathFolder" value="$(find local_planner)/paths"/>
+    <param name="sensorOffsetX" value="0.0"/>
+    <param name="sensorOffsetY" value="0.0"/>
+    <param name="cameraOffsetZ" value="0.0"/>
+    <param name="vehicleLength" value="0.60"/>
+    <param name="vehicleWidth" value="0.45"/>
+    <param name="twoWayDrive" value="true"/>
+    <param name="laserVoxelSize" value="0.05"/>
+    <param name="terrainVoxelSize" value="0.10"/>
+    <param name="useTerrainAnalysis" value="true"/>
+    <param name="checkObstacle" value="true"/>
+    <param name="checkRotObstacle" value="false"/>
+    <param name="adjacentRange" value="4.25"/>
+    <param name="obstacleHeightThre" value="0.30"/>
+    <param name="groundHeightThre" value="0.10"/>
+    <param name="costHeightThre" value="0.50"/>
+    <param name="costScore" value="0.02"/>
+    <param name="useCost" value="false"/>
+    <param name="pointPerPathThre" value="2"/>
+    <param name="minRelZ" value="-0.50"/>
+    <param name="maxRelZ" value="0.25"/>
+    <param name="maxSpeed" value="0.50"/>
+    <param name="dirWeight" value="0.02"/>
+    <param name="dirThre" value="90.0"/>
+    <param name="dirToVehicle" value="false"/>
+    <param name="pathScale" value="1.25"/>
+    <param name="minPathScale" value="0.75"/>
+    <param name="pathScaleStep" value="0.25"/>
+    <param name="pathScaleBySpeed" value="true"/>
+    <param name="minPathRange" value="1.0"/>
+    <param name="pathRangeStep" value="0.5"/>
+    <param name="pathRangeBySpeed" value="true"/>
+    <param name="pathCropByGoal" value="true"/>
+    <param name="autonomyMode" value="true"/>
+    <param name="autonomySpeed" value="0.50"/>
+    <param name="joyToSpeedDelay" value="2.0"/>
+    <param name="joyToCheckObstacleDelay" value="5.0"/>
+    <param name="goalClearRange" value="0.50"/>
+    <param name="goalX" value="0.0"/>
+    <param name="goalY" value="0.0"/>
+  </node>
+
+  <!-- LRAE's velocity follower; output goes to the Go2 policy boundary. -->
+  <node pkg="local_planner" type="pathFollower" name="pathFollower"
+        output="screen" required="true"
+        launch-prefix="bash -c 'sleep $(arg start_delay); exec $0 $@'">
+    <remap from="/state_estimation" to="/ground_truth/state"/>
+    <remap from="/cmd_vel" to="/planning/cmd_vel_raw"/>
+
+    <param name="sensorOffsetX" value="0.0"/>
+    <param name="sensorOffsetY" value="0.0"/>
+    <param name="cameraOffsetZ" value="0.0"/>
+    <param name="pubSkipNum" value="1"/>
+    <param name="twoWayDrive" value="true"/>
+    <param name="lookAheadDis" value="0.50"/>
+    <param name="yawRateGain" value="$(arg yaw_rate_gain)"/>
+    <param name="stopYawRateGain" value="$(arg stop_yaw_rate_gain)"/>
+    <param name="maxYawRate" value="$(arg max_yaw_rate)"/>
+    <param name="maxSpeed" value="0.50"/>
+    <param name="maxAccel" value="0.50"/>
+    <param name="switchTimeThre" value="1.0"/>
+    <param name="dirDiffThre" value="$(arg dir_diff_thre)"/>
+    <param name="stopDisThre" value="0.20"/>
+    <param name="slowDwnDisThre" value="0.85"/>
+    <param name="useInclRateToSlow" value="false"/>
+    <param name="inclRateThre" value="120.0"/>
+    <param name="slowRate1" value="0.25"/>
+    <param name="slowRate2" value="0.50"/>
+    <param name="slowTime1" value="2.0"/>
+    <param name="slowTime2" value="2.0"/>
+    <param name="useInclToStop" value="false"/>
+    <param name="inclThre" value="45.0"/>
+    <param name="stopTime" value="5.0"/>
+    <param name="noRotAtStop" value="false"/>
+    <param name="noRotAtGoal" value="true"/>
+    <param name="autonomyMode" value="true"/>
+    <param name="autonomySpeed" value="0.50"/>
+    <param name="joyToSpeedDelay" value="2.0"/>
+  </node>
+
+  <!-- Frame glue.  The Go2 side publishes world -> base and base -> trunk ->
+       lidar_link.  LRAE hardcodes map and base_link. -->
+  <node pkg="tf" type="static_transform_publisher" name="map_to_world"
+        args="0 0 0 0 0 0 map world 100"/>
+  <node pkg="tf" type="static_transform_publisher" name="base_to_base_link"
+        args="0 0 0 0 0 0 base base_link 100"/>
+  <node pkg="tf" type="static_transform_publisher" name="base_to_vehicle"
+        args="0 0 0 0 0 0 base vehicle 100"/>
+</launch>

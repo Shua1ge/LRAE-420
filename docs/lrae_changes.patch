@@ -1,0 +1,91 @@
+# LRAE exploration_map_merge bootstrap fix (2026-11-03)
+#
+# Symptom: with Go2 spawning in NewMine, the robot stands up with < 0.1 m of
+# horizontal drift.  exploration_map_merge only calls mapMerge() after the
+# robot has moved 0.1 m (line "if(abs(ego_position_last.x - ...) >= 0.1 ...)"),
+# and the one-shot bootstrap eligibility (ego_position_last initialised to
+# mapinitox) is consumed on the first loop iteration, before initSucessed can
+# flip.  Result: no global map -> no exploration centroid -> no motion, and
+# the merge gate can never be passed.  Whether a run bootstraps depends on the
+# robot's random stand-up wobble exceeding 0.1 m.
+#
+# Fix: run mapMerge() once immediately after initGlobalMap() and publish
+# /MoveInited, so the first merged window is available without any motion.
+#
+# Applies to: ws/src/lrae/lrae_planner/src/exploration_map_merge.cpp
+# (LRAE tarball, not a git repo — apply by hand or with patch -p1 from
+#  ws/src/lrae).
+--- a/lrae_planner/src/exploration_map_merge.cpp
++++ b/lrae_planner/src/exploration_map_merge.cpp
+@@ -236,7 +236,14 @@
+         if(hasMap && !initSucessed)
+         {
+             initGlobalMap();
++            // Bootstrap merge: mapMerge() below only runs after the robot has
++            // moved 0.1 m, and ego_position_last was already consumed before
++            // initSucessed could flip.  A robot that stands still at spawn
++            // (Go2 stand-up wobble < 0.1 m) would otherwise deadlock with no
++            // global map, no centroid, and therefore no motion at all.
++            mapMerge();
++            isMoveInited.data = 1;
++            move_inited_pub.publish(isMoveInited);
+         }
+         geometry_msgs::Pose current_pose_ros;
+
+# ============================================================================
+# Fix 2 (same file set, 2026-11-04): narrow-tunnel viewpoint starvation +
+# permanent go_home_ latch.
+#
+# Symptom: in the 10-min NewMine run the robot reached (8.5, 1.1) at ~44 s,
+# then the planner reported "The current window has no centroid" every cycle
+# and finally "There are almost no explorable unknown regions!" forever; the
+# robot pushed into a wall at 0.5 m/s command with ~0 m/s actual speed.
+#
+# Offline replication of getCentroid/getCentroidHelper on the dumped
+# /globalMap at the stall showed: 149 unknown cells adjacent to free space,
+# of which 83 are excluded by the 8-neighbour occupied rule, 5 remain with
+# exactly 3-4 free neighbours (rule requires exactly 3 or 4), and all 5 are
+# excluded by the "no occupied within 2 cells (0.6 m)" visibility rule ->
+# viewpoint_fir empty everywhere -> no centroid can be accepted -> fallback
+# exhausted -> go_home_count_ > 20 latches go_home_ permanently (upstream
+# never clears it).
+#
+# Fix (exploration_planning.h/.cpp), parameterised, upstream defaults keep
+# original behaviour:
+#   - vp_free_neighbors_min (default 3): replaces "exactly 3 or 4" with
+#     "count_thre >= N".  NewMine uses 2.
+#   - vp_occ_clear_cells (default 2): Chebyshev occupied-clearance radius;
+#     0 disables the ring check (8-neighbour exclusion still applies).
+#     NewMine uses 0.
+#   - go_home_ is cleared whenever getCentroid succeeds again.
+# Launch: lrae_go2/launch/lrae_newmine.launch sets both params.
+
+# ============================================================================
+# Fix 3 (2026-11-04): frontier fallback + goal-distance floor + hysteresis.
+#
+# Run #2 (viewpoint relaxation only) stalled at (4.1, 1.6): viewpoints existed
+# (49 candidates, 27 reachable) but route/path planning failed repeatedly
+# ("Replan." x21) and go_home_ re-latched; the earlier unlatch was dead code
+# (placed below the early return).
+#
+# exploration_planning.{h,cpp}:
+#   - publishFrontierFallback(): BFS from the robot over traversable cells
+#     (< 95) to the nearest/last-valid unknown-adjacent cell >= goal_min_dis_
+#     away; publishes the cell path on /exporation_path.  Called whenever no
+#     path was published this cycle (no centroid + empty outwin, outwin path
+#     failure, Replan, go_home_ latch) — the latch branch now probes the
+#     fallback instead of returning forever, so go_home_ recovers.
+#   - publishExplorationPathFiltered(): drops published goals whose endpoint
+#     is < goal_min_dis_ (default 1.2, NewMine launch 0.7 m) from the robot;
+#     a nearer goal sits inside pathFollower's stopDisThre (0.2) + look-ahead
+#     deadband, so the robot never reaches it, the map never updates and the
+#     same goal repeats forever (run #3 dither).
+#   - Goal hysteresis on the fallback target (last_fb_goal_) with
+#     reachability re-check; without it the robot spins between competing
+#     nearest-frontier goals (run #5/#6: 76 m walked, |wz|>0.3 on 71% of
+#     cycles, coverage plateaus).
+#
+# Result (10-min NewMine runs): run #1 (upstream) froze at t=44 s, 6.4 m,
+# coverage +50 m2 then flat; run #6 with fixes: no freeze, 75.6 m walked,
+# tracking r=0.99 cmd->actual; remaining limitation: coverage still plateaus
+# at ~3 min (limit cycle at the merge boundary), see results notes.

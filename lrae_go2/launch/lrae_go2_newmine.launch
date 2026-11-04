@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- One-shot launch: Go2 + MID-360 + RL policy + LRAE, NewMine scene. -->
+  <arg name="world" default="/ws/worlds/newmine/NewMine_classic.sdf"/>
+  <arg name="gui" default="false"/>
+  <arg name="start_delay" default="15.0"
+       doc="Seconds to wait for the policy stand-up before LRAE commands."/>
+  <arg name="minrange" default="3.0"
+       doc="Raise to 8-20 for open scenes; 3.0 for NewMine-width tunnels."/>
+
+  <include file="$(find go2_description)/launch/go2_stand_walk.launch">
+    <arg name="world" value="$(arg world)"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="use_sensor_head" value="false"/>
+    <arg name="use_nearfield" value="false"/>
+    <arg name="use_mid360" value="true"/>
+    <arg name="use_d435" value="false"/>
+    <arg name="use_filter" value="false"/>
+    <arg name="x" value="0.0"/>
+    <arg name="y" value="0.0"/>
+    <arg name="z" value="0.55"/>
+  </include>
+
+  <include file="$(find lrae_go2)/launch/lrae_newmine.launch">
+    <arg name="start_delay" value="$(arg start_delay)"/>
+    <arg name="minrange" value="$(arg minrange)"/>
+  </include>
+</launch>
