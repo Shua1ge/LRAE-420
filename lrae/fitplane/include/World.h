@@ -170,6 +170,36 @@ public:
     // Minimum occupied voxels in the local fit box before a plane is fitted.
     // The upstream value 10 suits rough cave floors; on smooth open ground a
     // 0.5 m box holds only 5-9 surface voxels and every cell stays unknown.
+    // Vertical band (metres around the robot base) used for the voxel grid.
+    // Upstream builds the grid over the full cloud z extent, which on a campus
+    // means ~270 layers per 0.1 m voxel -> ~100 MB allocated and cleared per
+    // frame.  Values of 1e9 disable the clamp (upstream behaviour).
+    // False when the last initGridMap() could not rebuild the voxel grid
+    // (empty local cloud, e.g. the first scans arriving before TF is ready).
+    // Callers must skip the plane-map update in that case instead of using
+    // uninitialised +/-INF bounds.
+    bool rebuild_ok_ = false;
+    // Grid reuse: the voxel grid is allocated once over a margin-expanded
+    // box and only the previously observed voxels are cleared per frame
+    // (upstream re-allocates + memsets the whole grid every cloud, which on a
+    // campus is ~100 MB per frame -> ~15 ms of the ~27 ms frame budget).
+    std::vector<Eigen::Vector3i> observed_;
+    bool grid_allocated_ = false;
+    float grid_z_below_ = 1e9f;
+    float grid_z_above_ = 1e9f;
+    // Vertical half-extent (metres) of the plane-fit voxel box around the
+    // surface point.  Upstream 1.0 m also collects canopy/branch voxels on
+    // vegetated ground, which contaminates the fit and turns ground cells
+    // into obstacles.  0.3 m keeps the ground layer (and slopes up to ~40deg
+    // inside the 0.7 m fit box) while excluding most vegetation.
+    float fit_z_half_extent_ = 1.0f;
+    // RANSAC on the voxels inside the fit box: the dominant plane is the
+    // ground, while grass/bushes/canopy are outliers.  Without it the SVD is
+    // dragged by vegetation and ground cells become obstacles.
+    bool fit_ransac_ = false;
+    float fit_ransac_thresh_ = 0.05f;
+    int fit_ransac_iters_ = 40;
+    float fit_ransac_min_ratio_ = 0.3f;
     int fit_min_points_ = 10;
     // Fit box radius (m); upstream 0.25.
     float fit_radius_ = 0.25;

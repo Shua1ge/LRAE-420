@@ -1,0 +1,201 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- Replay a real Go2 + MID-360 session (FAST-LIVO2) through the LRAE stack.
+       Inputs (from the converted ROS1 bag):
+         /cloud_registered     PointCloud2, frame camera_init, ~9.6 Hz
+         /aft_mapped_to_init   Odometry, frame camera_init -> aft_mapped, ~9.6 Hz
+         /tf, /tf_static       map -> camera_init comes from the bag itself
+       No Gazebo, no robot, no policy: this validates mapping/planning on real data.
+
+       The odometry frame layout differs from the sim: add aft_mapped->base_link
+       so exploration_map_merge (map->base_link) and fitplane work unchanged.
+  -->
+
+  <arg name="map_width" default="1000"/>
+  <arg name="map_height" default="1000"/>
+  <arg name="map_origin_x" default="-190.0" doc="bag trajectory x -141..18; local plane map extends ~40 m beyond"/>
+  <arg name="map_origin_y" default="-100.0" doc="bag trajectory y -48..138; local plane map extends ~40 m beyond"/>
+  <arg name="merge_size" default="20.0"/>
+  <arg name="min_occ_hits" default="2"/>
+  <arg name="minrange" default="8.0"/>
+  <arg name="cloud_topic" default="/cloud_registered"/>
+  <arg name="target_frame" default="map"/>
+  <arg name="rviz" default="false"/>
+  <arg name="init_free_radius" default="0.0"/>
+  <arg name="fit_z_half_extent" default="0.3"/>
+  <arg name="fit_ransac" default="false"/>
+  <arg name="occ_dilate" default="false"
+       doc="Dilate obstacles by one 0.3 m cell (upstream). false keeps the map geometric."/>
+  <arg name="occ_dilate_local" default="true"
+       doc="Keep the 0.3 m clearance ring for localPlanner only; the published map stays geometric."/>
+  <arg name="accum_frames" default="1"
+       doc="Fit on the union of the last N clouds (map frame). 3 triples density and removes 3-point planes."/>
+  <arg name="ground_gate_height" default="0.0"
+       doc="Reject fitted cells whose surface is this far above the local median (canopy/roof). 0 disables."/>
+  <arg name="ground_gate_radius_cells" default="3"/>
+  <arg name="ground_gate_min_neighbors" default="5"/>
+  <arg name="fit_min_points" default="4"/>
+  <arg name="fit_radius" default="0.35"/>
+  <arg name="neighbor_recover" default="true"/>
+  <arg name="neighbor_radius_cells" default="3"/>
+  <arg name="neighbor_min_points" default="3"/>
+  <arg name="goal_min_dis" default="0.7"/>
+
+  <!-- bag cloud (camera_init) -> map.  map->camera_init is in the bag's tf_static. -->
+  <node pkg="lrae_go2" type="mid360_to_world.py" name="mid360_to_world" output="screen">
+    <param name="source_topic" value="$(arg cloud_topic)"/>
+    <param name="output_topic" value="/mid360_world"/>
+    <param name="target_frame" value="$(arg target_frame)"/>
+    <param name="tf_timeout" value="0.10"/>
+  </node>
+
+  <node pkg="fitplane" type="Traversibility_mapping" name="Traversibility_mapping"
+        output="screen" required="true">
+    <param name="PointCloud_Map_topic" value="/mid360_world"/>
+    <param name="Grid_Map_topic" value="/grid_map"/>
+    <param name="Plane_Map_topic" value="/plane_map"/>
+    <param name="use_ex_range" value="false"/>
+    <param name="fit_z_half_extent" value="$(arg fit_z_half_extent)"/>
+    <param name="fit_ransac" value="$(arg fit_ransac)"/>
+    <param name="fit_min_points" value="$(arg fit_min_points)"/>
+    <param name="fit_radius" value="$(arg fit_radius)"/>
+    <param name="occ_dilate" value="$(arg occ_dilate)"/>
+    <param name="occ_dilate_local" value="$(arg occ_dilate_local)"/>
+    <param name="accum_frames" value="$(arg accum_frames)"/>
+    <param name="ground_gate_height" value="$(arg ground_gate_height)"/>
+    <param name="ground_gate_radius_cells" value="$(arg ground_gate_radius_cells)"/>
+    <param name="ground_gate_min_neighbors" value="$(arg ground_gate_min_neighbors)"/>
+    <param name="neighbor_recover" value="$(arg neighbor_recover)"/>
+    <param name="neighbor_radius_cells" value="$(arg neighbor_radius_cells)"/>
+    <param name="neighbor_min_points" value="$(arg neighbor_min_points)"/>
+    <param name="neighbor_min_eig_ratio" value="0.1"/>
+    <param name="neighbor_max_z_span" value="0.15"/>
+    <param name="map_cell_size" value="0.3"/>
+    <param name="grid_z_below" value="1.2"/>
+    <param name="grid_z_above" value="2.0"/>
+  </node>
+
+  <node pkg="lrae_planner" type="exploration_map_merge" name="exploration_map_merge" output="screen">
+    <param name="map_w" value="$(arg map_width)"/>
+    <param name="map_h" value="$(arg map_height)"/>
+    <param name="mapinitox" value="$(arg map_origin_x)"/>
+    <param name="mapinitoy" value="$(arg map_origin_y)"/>
+    <param name="merge_size" value="$(arg merge_size)"/>
+    <param name="min_occ_hits" value="$(arg min_occ_hits)"/>
+    <param name="safe_obs_dis" value="1.0"/>
+    <param name="init_free_radius" value="$(arg init_free_radius)"/>
+  </node>
+
+  <node pkg="lrae_planner" type="lrae_planner_node" name="lrae_planner_node" output="screen">
+    <param name="angle_pen" value="0.45"/>
+    <param name="update_cen_thre" value="6"/>
+    <param name="unknown_num_thre" value="200"/>
+    <param name="minrange" value="$(arg minrange)"/>
+    <param name="limit_max_square" value="false"/>
+    <param name="use_go_end_nearest" value="false"/>
+    <param name="vp_free_neighbors_min" value="2"/>
+    <param name="vp_occ_clear_cells" value="0"/>
+    <param name="max_assess_viewpoints" value="12"/>
+    <param name="goal_min_dis" value="$(arg goal_min_dis)"/>
+  </node>
+
+  <node pkg="gen_local_goal" type="gen_local_goal_node" name="gen_local_goal_node" output="screen">
+    <remap from="/cmd_vel" to="/cmd_vel_disabled"/>
+  </node>
+
+  <node pkg="local_planner" type="localPlanner" name="localPlanner" output="screen" required="true">
+    <remap from="/state_estimation" to="/aft_mapped_to_init"/>
+    <remap from="/way_point" to="/look_ahead_goal"/>
+    <remap from="/terrain_map" to="/local_traversibility_ponit_cloud"/>
+    <remap from="/path" to="/lrae_local_path"/>
+    <param name="pathFolder" value="$(find local_planner)/paths"/>
+    <param name="sensorOffsetX" value="0.0"/>
+    <param name="sensorOffsetY" value="0.0"/>
+    <param name="cameraOffsetZ" value="0.0"/>
+    <param name="vehicleLength" value="0.60"/>
+    <param name="vehicleWidth" value="0.45"/>
+    <param name="twoWayDrive" value="true"/>
+    <param name="laserVoxelSize" value="0.05"/>
+    <param name="terrainVoxelSize" value="0.10"/>
+    <param name="useTerrainAnalysis" value="true"/>
+    <param name="checkObstacle" value="true"/>
+    <param name="checkRotObstacle" value="false"/>
+    <param name="adjacentRange" value="4.25"/>
+    <param name="obstacleHeightThre" value="0.30"/>
+    <param name="groundHeightThre" value="0.10"/>
+    <param name="costHeightThre" value="0.50"/>
+    <param name="costScore" value="0.02"/>
+    <param name="useCost" value="false"/>
+    <param name="pointPerPathThre" value="2"/>
+    <param name="minRelZ" value="-0.50"/>
+    <param name="maxRelZ" value="0.25"/>
+    <param name="maxSpeed" value="0.50"/>
+    <param name="dirWeight" value="0.02"/>
+    <param name="dirThre" value="90.0"/>
+    <param name="dirToVehicle" value="false"/>
+    <param name="pathScale" value="1.25"/>
+    <param name="minPathScale" value="0.75"/>
+    <param name="pathScaleStep" value="0.25"/>
+    <param name="pathScaleBySpeed" value="true"/>
+    <param name="minPathRange" value="1.0"/>
+    <param name="pathRangeStep" value="0.5"/>
+    <param name="pathRangeBySpeed" value="true"/>
+    <param name="pathCropByGoal" value="true"/>
+    <param name="autonomyMode" value="true"/>
+    <param name="autonomySpeed" value="0.50"/>
+    <param name="joyToSpeedDelay" value="2.0"/>
+    <param name="joyToCheckObstacleDelay" value="5.0"/>
+    <param name="goalClearRange" value="0.50"/>
+    <param name="goalX" value="0.0"/>
+    <param name="goalY" value="0.0"/>
+  </node>
+
+  <node pkg="local_planner" type="pathFollower" name="pathFollower" output="screen" required="true">
+    <remap from="/state_estimation" to="/aft_mapped_to_init"/>
+    <remap from="/path" to="/lrae_local_path"/>
+    <remap from="/cmd_vel" to="/planning/cmd_vel_raw"/>
+    <param name="sensorOffsetX" value="0.0"/>
+    <param name="sensorOffsetY" value="0.0"/>
+    <param name="cameraOffsetZ" value="0.0"/>
+    <param name="pubSkipNum" value="1"/>
+    <param name="twoWayDrive" value="true"/>
+    <param name="lookAheadDis" value="0.50"/>
+    <param name="yawRateGain" value="7.5"/>
+    <param name="stopYawRateGain" value="7.5"/>
+    <param name="maxYawRate" value="45.0"/>
+    <param name="maxSpeed" value="0.50"/>
+    <param name="maxAccel" value="0.50"/>
+    <param name="switchTimeThre" value="1.0"/>
+    <param name="dirDiffThre" value="0.10"/>
+    <param name="stopDisThre" value="0.20"/>
+    <param name="slowDwnDisThre" value="0.85"/>
+    <param name="useInclRateToSlow" value="false"/>
+    <param name="inclRateThre" value="120.0"/>
+    <param name="slowRate1" value="0.25"/>
+    <param name="slowRate2" value="0.50"/>
+    <param name="slowTime1" value="2.0"/>
+    <param name="slowTime2" value="2.0"/>
+    <param name="useInclToStop" value="false"/>
+    <param name="inclThre" value="45.0"/>
+    <param name="stopTime" value="5.0"/>
+    <param name="noRotAtStop" value="false"/>
+    <param name="noRotAtGoal" value="true"/>
+    <param name="autonomyMode" value="true"/>
+    <param name="autonomySpeed" value="0.50"/>
+    <param name="joyToSpeedDelay" value="2.0"/>
+  </node>
+
+  <!-- TF: the bag gives map->camera_init and camera_init->aft_mapped.
+       Add the single missing link for LRAE's map->base_link lookups. -->
+  <node pkg="tf" type="static_transform_publisher" name="map_to_camera_init"
+        args="0 0 0 0 0 0 map camera_init 100"/>
+  <node pkg="tf" type="static_transform_publisher" name="aft_mapped_to_base_link"
+        args="0 0 0 0 0 0 aft_mapped base_link 100"/>
+  <!-- localPlanner publishes its path in frame "vehicle"; without this link
+       RViz cannot display /lrae_local_path. -->
+  <node pkg="tf" type="static_transform_publisher" name="base_link_to_vehicle"
+        args="0 0 0 0 0 0 base_link vehicle 100"/>
+
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="rviz"
+        args="-d $(find lrae_go2)/rviz/lrae_replay.rviz" output="screen"/>
+</launch>

@@ -49,6 +49,26 @@
   <arg name="spin_duration" default="10.5"/>
   <arg name="follower_start_delay"
        default="$(eval arg('start_delay') + (arg('spin_duration') if arg('startup_spin') == 'true' else 0.0))"/>
+  <arg name="min_occ_hits" default="2"/>
+  <arg name="merge_size" default="20.0"
+       doc="Fuse the local plane map within 20 m of the robot.  9 m (upstream)
+            makes the accumulated map an ~18 m corridor; 20 m measured +42%
+            free cells and a 20-27 m swath on the campus."/>
+  <arg name="grid_z_below" default="1.2"
+       doc="Vertical voxel-grid band below the robot base.  The earlier crashes were an out-of-bounds write in setObs (fixed); with the reusable grid this cuts fitplane frame time further (14.4 -> 8.2 ms)."/>
+  <arg name="grid_z_above" default="2.0"/>
+  <arg name="map_cell_size" default="0.3"/>
+  <arg name="fit_z_half_extent" default="0.3"/>
+  <arg name="fit_ransac" default="false"/>
+  <arg name="occ_dilate" default="false"/>
+  <arg name="occ_dilate_local" default="true"
+       doc="Keep the 0.3 m clearance ring for localPlanner only; the published map stays geometric."/>
+  <arg name="accum_frames" default="1"
+       doc="Fit on the union of the last N clouds (map frame). 3 triples density and removes 3-point planes."/>
+  <arg name="ground_gate_height" default="0.0"
+       doc="Reject fitted cells whose surface is this far above the local median (canopy/roof). 0 disables."/>
+  <arg name="ground_gate_radius_cells" default="3"/>
+  <arg name="ground_gate_min_neighbors" default="5"/>
   <arg name="fit_min_points" default="4"/>
   <arg name="fit_radius" default="0.35"/>
   <arg name="neighbor_recover" default="true"/>
@@ -109,6 +129,13 @@
     <!-- Smooth plaza: a 1.0 m fit box with >=4 surface voxels.  Upstream
          0.25 m / 10 leaves every ground cell unknown on open pavement. -->
     <arg name="init_free_radius" value="2.1"/>
+    <arg name="min_occ_hits" value="$(arg min_occ_hits)"/>
+    <arg name="merge_size" value="$(arg merge_size)"/>
+    <arg name="grid_z_below" value="$(arg grid_z_below)"/>
+    <arg name="grid_z_above" value="$(arg grid_z_above)"/>
+    <arg name="map_cell_size" value="$(arg map_cell_size)"/>
+    <arg name="fit_z_half_extent" value="$(arg fit_z_half_extent)"/>
+    <arg name="fit_ransac" value="$(arg fit_ransac)"/>
     <arg name="fit_min_points" value="$(arg fit_min_points)"/>
     <arg name="fit_radius" value="$(arg fit_radius)"/>
     <arg name="neighbor_recover" value="$(arg neighbor_recover)"/>
@@ -116,5 +143,11 @@
     <arg name="neighbor_radius_cells" value="$(arg neighbor_radius_cells)"/>
     <arg name="neighbor_min_eig_ratio" value="$(arg neighbor_min_eig_ratio)"/>
     <arg name="neighbor_max_z_span" value="$(arg neighbor_max_z_span)"/>
+    <arg name="occ_dilate" value="$(arg occ_dilate)"/>
+    <arg name="occ_dilate_local" value="$(arg occ_dilate_local)"/>
+    <arg name="accum_frames" value="$(arg accum_frames)"/>
+    <arg name="ground_gate_height" value="$(arg ground_gate_height)"/>
+    <arg name="ground_gate_radius_cells" value="$(arg ground_gate_radius_cells)"/>
+    <arg name="ground_gate_min_neighbors" value="$(arg ground_gate_min_neighbors)"/>
   </include>
 </launch>

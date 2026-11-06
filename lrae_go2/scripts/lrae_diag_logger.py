@@ -40,7 +40,7 @@ def yaw_from_quat(x, y, z, w):
 
 
 class DiagLogger:
-    def __init__(self, out_path, coverage_period):
+    def __init__(self, out_path, coverage_period, odom_topic):
         self.lock = threading.Lock()
         # latest odom
         self.t_ros = None
@@ -87,7 +87,7 @@ class DiagLogger:
             self.cov_writer = csv.writer(self.cov_f)
             self.cov_writer.writerow(["t_ros", "unknown", "free", "occupied"])
 
-        rospy.Subscriber("/ground_truth/state", Odometry,
+        rospy.Subscriber(odom_topic, Odometry,
                          self.odom_cb, queue_size=5)
         rospy.Subscriber("/planning/cmd_vel_raw", Twist,
                          self.cmd_cb, queue_size=50)
@@ -224,12 +224,14 @@ class DiagLogger:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--output", default="/out/diag.csv")
+    ap.add_argument("--odom-topic", default="/ground_truth/state",
+                    help="sim: /ground_truth/state; bag replay: /aft_mapped_to_init")
     ap.add_argument("--coverage-period", type=float, default=2.0,
                     help="seconds between /globalMap coverage samples; "
                          "0 disables coverage logging")
     args, _ = ap.parse_known_args()
     rospy.init_node("lrae_diag_logger")
-    logger = DiagLogger(args.output, args.coverage_period)
+    logger = DiagLogger(args.output, args.coverage_period, args.odom_topic)
     try:
         rospy.spin()
     finally:

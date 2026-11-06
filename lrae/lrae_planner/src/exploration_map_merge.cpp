@@ -43,6 +43,12 @@ double safe_obs_dis = 20.0;
 // unknown at startup, so no frontier can exist until the robot moves and
 // the global map has memory.  Radius 0 disables (upstream behaviour).
 double init_free_radius = 0.0;
+// Persistence filter: a global cell is marked occupied only after it has been
+// observed occupied in at least this many consecutive merges.  1 = upstream
+// behaviour; 2 filters transient objects (people, moving branches) that
+// otherwise leave permanent black cells along the traversed path.
+int min_occ_hits = 1;
+std::vector<unsigned char> occ_hits;
 
 std_msgs::Int8 isMoveInited;
 
@@ -83,6 +89,7 @@ void initGlobalMap()
     mapUpdateRes = mapData.info.resolution * 2;
     mapUpdateWidth = (int)(globalMapData.info.width * mapData.info.resolution / mapUpdateRes);
     mapUpdateHeight = (int)(globalMapData.info.height * mapData.info.resolution / mapUpdateRes);
+    occ_hits.assign((size_t)globalMapData.info.width * globalMapData.info.height, 0);
     mapUpdate = new mapUpdateData*[mapUpdateWidth];
     for(int i = 0; i < mapUpdateWidth; i++)
     {
@@ -118,6 +125,31 @@ void mapMerge()
 
                 int ux = CONTXY2DISC(px - globalMapData.info.origin.position.x, mapUpdateRes); 
                 int uy = CONTXY2DISC(py - globalMapData.info.origin.position.y, mapUpdateRes);
+
+                // Bounds check: the local plane map extends beyond the robot by
+                // its own margin.  Without this, a robot near the global-map
+                // border writes out of bounds and the merge node dies (the map
+                // silently stops updating for the rest of the run).
+                if(ix < 0 || iy < 0 || ix >= globalMapData.info.width ||
+                   iy >= globalMapData.info.height ||
+                   ux < 0 || uy < 0 || ux >= mapUpdateWidth || uy >= mapUpdateHeight)
+                    continue;
+
+                {
+                    const int hidx = ix + iy * globalMapData.info.width;
+                    const int8_t md = mapData.data[i + j * mapData.info.width];
+                    if(md >= 90)
+                    {
+                        if(occ_hits[hidx] < 255)
+                            occ_hits[hidx]++;
+                        if(occ_hits[hidx] < min_occ_hits)
+                            continue;   // not seen occupied often enough yet
+                    }
+                    else if(md >= 0)
+                    {
+                        occ_hits[hidx] = 0;
+                    }
+                }
 
                 if(rx == ux && ry == uy && ego_position_last.x != mapinitox)
                 {
@@ -259,6 +291,7 @@ int main(int argc, char** argv)
     node_handle.getParam("/exploration_map_merge/merge_size", merge_size);
     node_handle.getParam("/exploration_map_merge/safe_obs_dis", safe_obs_dis);
     node_handle.getParam("/exploration_map_merge/init_free_radius", init_free_radius);
+    node_handle.getParam("/exploration_map_merge/min_occ_hits", min_occ_hits);
     ros::Subscriber map_sub = node_handle.subscribe("/plane_OccMap", 1000, mapCallBack);
     ros::Publisher globalMap_pub = node_handle.advertise<nav_msgs::OccupancyGrid>("/globalMap", 10);
     ros::Publisher move_inited_pub = node_handle.advertise<std_msgs::Int8>("/MoveInited", 1);

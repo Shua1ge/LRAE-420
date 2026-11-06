@@ -14,6 +14,7 @@
 #include <message_filters/sync_policies/approximate_time.h>
 #include <message_filters/synchronizer.h>
 #include <nav_msgs/Odometry.h>
+#include <deque>
 
 namespace FitPlane
 {
@@ -65,6 +66,36 @@ public:
     float max_angle_ = 40.0; 
     float max_flatness_ = 0.01;
     float w1_ = 0.8;
+    // Post-process dilation: every free cell 8-adjacent to an occupied cell
+    // is rewritten to flatThre_ (99), which exploration_map_merge treats as
+    // an obstacle.  This inflates every obstacle by one 0.3 m cell and is
+    // the main source of black cells hugging the traversed path when the
+    // vegetation line is within ~0.6 m.  Measured on the 2026-11-05 bag:
+    // 91% of the occupied cells within 1 m of the path were first written
+    // as 99, not as a genuine 100.  Set false to keep the map geometric.
+    bool occ_dilate_ = true;
+    // Same 0.3 m ring, but only for /local_traversibility_ponit_cloud,
+    // i.e. the local planner's obstacle map.  The published occupancy
+    // grid stays geometric, so RViz/globalMap show real obstacle cells
+    // while localPlanner keeps its clearance margin.
+    bool occ_dilate_local_ = true;
+    // Temporal accumulation: fit on the union of the last N clouds.
+    // /cloud_registered is already in the map frame, so a 3-frame union
+    // needs no pose bookkeeping; at 0.5 m/s the robot moves 0.15 m, which
+    // is below the 0.3 m cell size.  Density x N is what makes a 3-point
+    // "plane" (degenerate: SVD residual is exactly 0) rare instead of
+    // routine.  1 = upstream behaviour.
+    int accum_frames_ = 1;
+    // Ground-height gate: a flat patch is not automatically walkable.
+    // A cell whose surface sits more than this far above the median
+    // surface of its fitted neighbours is a hedge/roof/canopy top and is
+    // demoted to obstacle.  0 disables (upstream behaviour).  On a
+    // uniform slope the median is symmetric, so slopes are unaffected.
+    float ground_gate_height_ = 0.0f;
+    int ground_gate_radius_cells_ = 3;
+    int ground_gate_min_neighbors_ = 5;
+    int ground_gated_ = 0;
+    std::deque<pcl::PointCloud<pcl::PointXYZ>> recent_clouds_;
 
     ros::Publisher plane_grid_map_pub_;
 
@@ -108,6 +139,7 @@ public:
     int nb_zjump_ = 0;
     int nb_recoverable_ = 0;
     double last_frame_ms_ = 0.0;
+    double last_rebuild_ms_ = 0.0;
     ros::Publisher diag_pub_;
     void publishDiagnostics();
     Plane fitFromPoints(const std::vector<Eigen::Vector3d>& pts);

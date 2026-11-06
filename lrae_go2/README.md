@@ -1,5 +1,8 @@
 # LRAE on Unitree Go2 + MID-360 (ROS 1 Noetic / Gazebo Classic)
 
+> 包级说明。**实验状态、每个改动针对的问题、尚未解决的问题以根目录 `README.md` 为准**；
+> 本文件保留接口与参数细节。
+
 This package connects the LRAE exploration stack to the existing Go2 Noetic
 simulation in `~/legged_exploration_bench/env/ros1_noetic/ws`.
 
@@ -47,23 +50,14 @@ roslaunch lrae_go2 lrae_newmine.launch start_delay:=15
 `lrae_go2_campus.launch` uses the CMU campus world plus a physical ground plane:
 
 ```bash
-DURATION=600 START_DELAY=20 MINRANGE=8.0 \
-X=2.8 Y=-55.1 Z=0.55 bash scripts/run_lrae_campus.sh
+roslaunch lrae_go2 lrae_go2_campus.launch gui:=true rviz:=true \
+  mid360_sensor_type:=gpu_ray
 ```
 
-The campus DAE is a photogrammetry mesh; its collision does not support a
-dynamic Go2 (the robot free-falls to z=-5000 m).  `worlds/campus/campus_go2.world`
-adds a 1400 x 1400 m plane at z=0 for the physics body while keeping the campus
-mesh for the LiDAR/visual scene.  The origin is a courtyard; (2.8, -55.1) is a
-flat open road/plaza selected from the preview point cloud.
-
-Campus paths sit ~0.1 rad off the nose, so `lrae_go2_campus.launch` overrides
-`dir_diff_thre=0.30`, `max_yaw_rate=30`, `yaw_rate_gain=3.0`; the upstream
-0.1 rad deadband leaves the robot spinning at `vx=0, wz=max`.
-
-`scripts/run_lrae_campus.sh` also samples `docker stats` into
-`docker_stats.csv` and runs `analyze_lrae_diag.py`.  Note: 600 s wall time is
-only ~365 s sim time on this campus mesh (real-time factor ~0.6).
+Current campus spawn is the hill summit `(173.8, -257.4, 5.85)` (ground z 5.30);
+override with `x:=/y:=/z:=`.  The world is a photogrammetry mesh, so the launch
+adds a ground plane for the physics body while keeping the mesh for LiDAR and
+rendering.  With GPU rays the run is roughly real time; CPU rays are ~0.3x.
 
 ## Interface
 

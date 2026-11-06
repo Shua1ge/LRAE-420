@@ -195,7 +195,10 @@ bool GraphSearch::Search(int startX, int startY, int goalX, int goalY, unsigned 
   key = searchExpState->g + heuristic(startX, startY, goalX, goalY) +  0 * occMap[startX][startY]; 
 
   openList2D_->insertheap(searchExpState, key);
-  char* pbClosed = (char*)calloc(1, width_ * height_);
+  if((int)closed_.size() != width_ * height_)
+    closed_.assign((size_t)width_ * height_, 0);
+  char* pbClosed = (char*)closed_.data();
+  closed_touched_.clear();
   expands.clear();
   while (!openList2D_->emptyheap() && std::min(INFINITECOST, search2DGoalState->g) > openList2D_->getminkeyheap())
   {
@@ -205,6 +208,7 @@ bool GraphSearch::Search(int startX, int startY, int goalX, int goalY, unsigned 
     int exp_y = searchExpState->y;
     expands.push_back(PointInt(exp_x, exp_y));
     pbClosed[exp_x + width_ * exp_y] = 1;
+    closed_touched_.push_back(exp_x + width_ * exp_y);
     unsigned char expcost = occMap[exp_x][exp_y];
     for (int dir = 0; dir < 8; dir++)
     {
@@ -267,7 +271,8 @@ bool GraphSearch::Search(int startX, int startY, int goalX, int goalY, unsigned 
     }  
   }   
 
-  free(pbClosed);  
+  for(int idx : closed_touched_) pbClosed[idx] = 0;
+  closed_touched_.clear();  
   // printf("Path cost=%d\n", search2DGoalState->g);
   pathCost = search2DGoalState->g;
   path.clear();
@@ -282,7 +287,7 @@ bool GraphSearch::Search(int startX, int startY, int goalX, int goalY, unsigned 
   return true;
 }
 
-bool GraphSearch::SearchforCost(int startX, int startY, int goalX, int goalY, nav_msgs::OccupancyGrid occMap, int width, int height,
+bool GraphSearch::SearchforCost(int startX, int startY, int goalX, int goalY, const nav_msgs::OccupancyGrid& occMap, int width, int height,
                          unsigned char obsthresh, int& pathCost, std::vector<PointInt>& path)
 {
   width_ = width;
@@ -320,7 +325,10 @@ bool GraphSearch::SearchforCost(int startX, int startY, int goalX, int goalY, na
   searchExpState->g = 0;
   key = searchExpState->g + heuristic(startX, startY, goalX, goalY); 
   forCostopenList2D_->insertheap(searchExpState, key);
-  char* pbClosed = (char*)calloc(1, width_ * height_);
+  if((int)closed_.size() != width_ * height_)
+    closed_.assign((size_t)width_ * height_, 0);
+  char* pbClosed = (char*)closed_.data();
+  closed_touched_.clear();
 
   while (!forCostopenList2D_->emptyheap() && std::min(INFINITECOST, search2DGoalState->g) > forCostopenList2D_->getminkeyheap())
   {
@@ -329,6 +337,7 @@ bool GraphSearch::SearchforCost(int startX, int startY, int goalX, int goalY, na
     int exp_x = searchExpState->x;
     int exp_y = searchExpState->y;
     pbClosed[exp_x + width_ * exp_y] = 1;
+    closed_touched_.push_back(exp_x + width_ * exp_y);
     int expcost = occMap.data[exp_x + exp_y * width_];
     for (int dir = 0; dir < 8; dir++)
     {
@@ -364,12 +373,13 @@ bool GraphSearch::SearchforCost(int startX, int startY, int goalX, int goalY, na
     }  
   }  
 
-  free(pbClosed); 
+  for(int idx : closed_touched_) pbClosed[idx] = 0;
+  closed_touched_.clear(); 
   pathCost = search2DGoalState->g;
   return true;
 }
 
-bool GraphSearch::SearchforNearCen(int startX, int startY, int goalX, int goalY, nav_msgs::OccupancyGrid occMap, int width, int height,
+bool GraphSearch::SearchforNearCen(int startX, int startY, int goalX, int goalY, const nav_msgs::OccupancyGrid& occMap, int width, int height,
                          unsigned char obsthresh, int& pathCost, std::vector<PointInt>& path)
 {
   width_ = width;
@@ -407,7 +417,10 @@ bool GraphSearch::SearchforNearCen(int startX, int startY, int goalX, int goalY,
   searchExpState->g = 0;
   key = searchExpState->g + heuristic(startX, startY, goalX, goalY); 
   forCostopenList2D_->insertheap(searchExpState, key);
-  char* pbClosed = (char*)calloc(1, width_ * height_);
+  if((int)closed_.size() != width_ * height_)
+    closed_.assign((size_t)width_ * height_, 0);
+  char* pbClosed = (char*)closed_.data();
+  closed_touched_.clear();
 
   while (!forCostopenList2D_->emptyheap() && std::min(INFINITECOST, search2DGoalState->g) > forCostopenList2D_->getminkeyheap())
   {
@@ -416,6 +429,7 @@ bool GraphSearch::SearchforNearCen(int startX, int startY, int goalX, int goalY,
     int exp_x = searchExpState->x;
     int exp_y = searchExpState->y;
     pbClosed[exp_x + width_ * exp_y] = 1;
+    closed_touched_.push_back(exp_x + width_ * exp_y);
     int expcost = occMap.data[exp_x + exp_y * width_];
     for (int dir = 0; dir < 8; dir++)
     {
@@ -451,7 +465,8 @@ bool GraphSearch::SearchforNearCen(int startX, int startY, int goalX, int goalY,
     }  
   }   
 
-  free(pbClosed); 
+  for(int idx : closed_touched_) pbClosed[idx] = 0;
+  closed_touched_.clear(); 
   pathCost = search2DGoalState->g;
 
   path.clear();

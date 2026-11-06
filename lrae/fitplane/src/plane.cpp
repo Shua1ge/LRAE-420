@@ -30,6 +30,26 @@ namespace FitPlane
         // Slam-sim-out or Fast-Lio
         pcl::PointCloud<pcl::PointXYZ> cloud;
         pcl::fromROSMsg(PointCloud_Map, cloud);
+        // Union of the last accum_frames clouds (all already in the map frame).
+        // Densifies sparse far-range ground without any pose bookkeeping; the
+        // per-frame diagnostics stay comparable because the window is the same.
+        if(accum_frames_ > 0)
+        {
+            recent_clouds_.push_back(cloud);
+            while((int)recent_clouds_.size() > accum_frames_)
+                recent_clouds_.pop_front();
+            if(recent_clouds_.size() > 1)
+            {
+                size_t total = 0;
+                for(const auto& c : recent_clouds_) total += c.points.size();
+                cloud.clear();
+                cloud.reserve(total);
+                for(const auto& c : recent_clouds_)
+                    cloud += c;
+            }
+        }
+        timeval rb0, rb1;
+        gettimeofday(&rb0, NULL);
         world_->initGridMap(cloud); 
 
         for (const auto& pt : world_->cloud_near_)
@@ -37,6 +57,10 @@ namespace FitPlane
             Eigen::Vector3d obstacle(pt.x, pt.y, pt.z);
             world_->setObs(obstacle);
         }
+        gettimeofday(&rb1, NULL);
+        last_rebuild_ms_ = 1000 * (rb1.tv_sec - rb0.tv_sec) + 0.001 * (rb1.tv_usec - rb0.tv_usec);
+        if(!world_->rebuild_ok_)
+            return;
         // visualization::visWorld(world_, &world_->Grid_Map_pub); 
         InitPlaneMap();
         
@@ -65,6 +89,12 @@ namespace FitPlane
         world_->nh_private_.getParam("neighbor_radius_cells", neighbor_radius_cells_);
         world_->nh_private_.getParam("neighbor_min_eig_ratio", neighbor_min_eig_ratio_);
         world_->nh_private_.getParam("neighbor_max_z_span", neighbor_max_z_span_);
+        world_->nh_private_.getParam("occ_dilate", occ_dilate_);
+        world_->nh_private_.getParam("occ_dilate_local", occ_dilate_local_);
+        world_->nh_private_.getParam("accum_frames", accum_frames_);
+        world_->nh_private_.getParam("ground_gate_height", ground_gate_height_);
+        world_->nh_private_.getParam("ground_gate_radius_cells", ground_gate_radius_cells_);
+        world_->nh_private_.getParam("ground_gate_min_neighbors", ground_gate_min_neighbors_);
         plane_OccMap_pub_ = world_->nh_.advertise<nav_msgs::OccupancyGrid>("plane_OccMap", 1);
         diag_pub_ = world_->nh_.advertise<std_msgs::Int32MultiArray>("fitplane_diagnostics", 10);
         trav_cloud_pub = world_->nh_.advertise<sensor_msgs::PointCloud2>("local_traversibility_ponit_cloud", 1);
@@ -110,6 +140,10 @@ namespace FitPlane
             leftdownbound_ = world_->getLowerBound();
             rightupbound_ = world_->getUpperBound();
             index_num_ = ((rightupbound_ - leftdownbound_) / resolution_).cast<int>() + Eigen::Vector3i::Ones(); 
+            ROS_INFO("[fitplane-debug] PlaneMap index_num (%d,%d,%d) bounds (%.1f,%.1f,%.1f)..(%.1f,%.1f,%.1f)",
+                index_num_(0), index_num_(1), index_num_(2),
+                leftdownbound_(0), leftdownbound_(1), leftdownbound_(2),
+                rightupbound_(0), rightupbound_(1), rightupbound_(2));
             Plane_Map_ = new Plane*[index_num_(0)];
             for(int i = 0; i < index_num_(0); i++)
             {
@@ -175,6 +209,7 @@ namespace FitPlane
     {
         surface_failed_ = fit_insufficient_ = fit_success_ = 0;
         neighbor_recovered_ = 0;
+        ground_gated_ = 0;
         nb_no_points_ = nb_collinear_ = nb_zjump_ = nb_recoverable_ = 0;
         int r_x = CONTXY2DISC(world_->ego_position_.x - leftdownbound_(0), resolution_); 
         int r_y = CONTXY2DISC(world_->ego_position_.y - leftdownbound_(1), resolution_);
@@ -290,6 +325,51 @@ namespace FitPlane
                 }
             }
         }
+
+        // ---- ground-height gate -------------------------------------------
+        // A flat patch is not necessarily walkable: hedge tops and roofs are
+        // flat too.  Demote fitted cells whose surface sits well above the
+        // median of the fitted cells around them.  The ring is symmetric, so
+        // a uniform slope does not trigger it; an isolated canopy column over
+        // visible ground does.
+        if(ground_gate_height_ > 0.0f)
+        {
+            const int GR = std::max(1, ground_gate_radius_cells_);
+            std::vector<std::pair<int,int>> demote;
+            std::vector<float> znb;
+            znb.reserve((2*GR+1)*(2*GR+1));
+            for(int i = 0; i < wx; i++)
+            {
+                for(int j = 0; j < wy; j++)
+                {
+                    int idx = (i + PAD) + (j + PAD) * WX;
+                    if(!has[idx]) continue;
+                    int gi = lowerx + i, gj = lowery + j;
+                    if(Plane_Map_[gi][gj].traversability >= 1.0f) continue;
+                    znb.clear();
+                    for(int di = -GR; di <= GR; di++)
+                    {
+                        for(int dj = -GR; dj <= GR; dj++)
+                        {
+                            if(di == 0 && dj == 0) continue;
+                            int ni = i + PAD + di, nj = j + PAD + dj;
+                            if(ni < 0 || nj < 0 || ni >= WX || nj >= WY) continue;
+                            if(!has[ni + nj * WX]) continue;
+                            znb.push_back(surf[ni + nj * WX]);
+                        }
+                    }
+                    if((int)znb.size() < ground_gate_min_neighbors_) continue;
+                    std::nth_element(znb.begin(), znb.begin() + znb.size()/2, znb.end());
+                    if(surf[idx] - znb[znb.size()/2] > ground_gate_height_)
+                        demote.push_back(std::make_pair(gi, gj));
+                }
+            }
+            for(size_t k = 0; k < demote.size(); k++)
+            {
+                Plane_Map_[demote[k].first][demote[k].second].traversability = 1.0f;
+                ground_gated_++;
+            }
+        }
         return true;
     }
 
@@ -302,6 +382,7 @@ namespace FitPlane
         Eigen::Vector3d ball_center = world->coordRounding(p_surface);
         float resolution = world->getResolution();
         int fit_num=static_cast<int>(radius/resolution);
+        int fit_num_z=std::max(1, (int)(world->fit_z_half_extent_ / resolution + 0.5f));
         Eigen::Matrix<bool,Eigen::Dynamic,Eigen::Dynamic> vac(2*fit_num+1,2*fit_num+1);
         int vac_cout_init=(2*fit_num+1)*(2*fit_num+1);
         
@@ -310,7 +391,7 @@ namespace FitPlane
             for(int j = -fit_num;j <= fit_num;j++)
             {
                 vac(i+fit_num,j+fit_num)=false;
-                for(int k = -10;k <= 10;k++)
+                for(int k = -fit_num_z;k <= fit_num_z;k++)
                 { 
                     Eigen::Vector3d point=ball_center+resolution*Eigen::Vector3d(i,j,k); 
                     
@@ -331,6 +412,45 @@ namespace FitPlane
 
         if((int)pt_num < world->fit_min_points_)
             return tmp_Plane;
+
+        if(world->fit_ransac_ && pt_num >= 20)
+        {
+            // Deterministic RANSAC: the ground is the dominant plane; grass,
+            // branches and canopy voxels are outliers.  Replace plane_pts by
+            // the best inlier set before the SVD.
+            std::vector<Eigen::Vector3d> best;
+            unsigned seed = 12345u;
+            auto rnd = [&](int n) {
+                seed = seed * 1103515245u + 12345u;
+                return (int)((seed >> 16) % (unsigned)n);
+            };
+            for(int it = 0; it < world->fit_ransac_iters_; it++)
+            {
+                int i0 = rnd((int)pt_num), i1 = rnd((int)pt_num), i2 = rnd((int)pt_num);
+                if(i0 == i1 || i1 == i2 || i0 == i2)
+                    continue;
+                Eigen::Vector3d n = (tmp_Plane.plane_pts[i1] - tmp_Plane.plane_pts[i0])
+                        .cross(tmp_Plane.plane_pts[i2] - tmp_Plane.plane_pts[i0]);
+                double nn = n.norm();
+                if(nn < 1e-6)
+                    continue;
+                n /= nn;
+                std::vector<Eigen::Vector3d> inl;
+                for(size_t k = 0; k < pt_num; k++)
+                {
+                    if(std::abs(n.dot(tmp_Plane.plane_pts[k] - tmp_Plane.plane_pts[i0]))
+                       < world->fit_ransac_thresh_)
+                        inl.push_back(tmp_Plane.plane_pts[k]);
+                }
+                if(inl.size() > best.size())
+                    best.swap(inl);
+            }
+            if(best.size() >= std::max(3.0, world->fit_ransac_min_ratio_ * (double)pt_num))
+            {
+                tmp_Plane.plane_pts = best;
+                pt_num = best.size();
+            }
+        }
 
         Eigen::Vector3d center;
         for(const auto&pt:tmp_Plane.plane_pts) center += pt; 
@@ -432,12 +552,12 @@ namespace FitPlane
         if(diag_pub_)
             diag_pub_.publish(msg);
         ROS_INFO_THROTTLE(1.0,
-            "[fitplane] fit_ms=%.1f window=%d surface_failed=%d fit_insufficient=%d "
+            "[fitplane] fit_ms=%.1f rebuild_ms=%.1f window=%d surface_failed=%d fit_insufficient=%d "
             "fit_success=%d neighbor_recovered=%d free=%d occupied=%d "
-            "recoverable=%d nb_no_points=%d nb_collinear=%d nb_zjump=%d",
-            last_frame_ms_, window_cells_, surface_failed_, fit_insufficient_,
+            "recoverable=%d nb_no_points=%d nb_collinear=%d nb_zjump=%d ground_gated=%d",
+            last_frame_ms_, last_rebuild_ms_, window_cells_, surface_failed_, fit_insufficient_,
             fit_success_, neighbor_recovered_, free_cells_, occupied_cells_,
-            nb_recoverable_, nb_no_points_, nb_collinear_, nb_zjump_);
+            nb_recoverable_, nb_no_points_, nb_collinear_, nb_zjump_, ground_gated_);
     }
 
     bool PlaneMap::pubPlaneGridMap(const PlaneMap &planemap)
@@ -525,6 +645,7 @@ namespace FitPlane
                 }
             }
         }
+        if(occ_dilate_)
         for(int i = 0; i < width_; i++)
         {
             for(int j = 0; j < height_; j++)
@@ -563,7 +684,27 @@ namespace FitPlane
             {
                 if(isInBorder(i, j))
                 {
-                    if(plane_Occmap_.data[i + j * width_] >= 99)
+                    // The published plane map stays geometric (occ_dilate_
+                    // off), but the local planner still needs its 0.3 m
+                    // clearance ring: mark this cell blocked when any
+                    // 8-neighbour is an obstacle.  occ_dilate_local_ only
+                    // affects this near-field cloud, never /plane_OccMap.
+                    bool blocked = plane_Occmap_.data[i + j * width_] >= 99;
+                    if(!blocked && occ_dilate_local_)
+                    {
+                        for(int d = 0; d < 8; d++)
+                        {
+                            int ni = i + d_x8[d];
+                            int nj = j + d_y8[d];
+                            if(isInBorder(ni, nj) &&
+                               plane_Occmap_.data[ni + nj * width_] >= 99)
+                            {
+                                blocked = true;
+                                break;
+                            }
+                        }
+                    }
+                    if(blocked)
                     {
                         double x = DISCXY2CONT(i, resolution_) + leftdownbound_(0);// 0.5
                         double y = DISCXY2CONT(j, resolution_) + leftdownbound_(1);// 0.5

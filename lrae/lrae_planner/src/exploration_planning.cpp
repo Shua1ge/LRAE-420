@@ -57,6 +57,7 @@ bool ExplorationPlanning::initialize()
     nh_.getParam("lrae_planner_node/use_go_end_nearest", use_go_end_nearest_);
     nh_.getParam("lrae_planner_node/end_neacen_disthre", end_neacen_disthre_);
     nh_.getParam("lrae_planner_node/end_cur_disrate", end_cur_disrate_);
+    nh_.getParam("lrae_planner_node/max_assess_viewpoints", max_assess_viewpoints_);
     nh_.getParam("lrae_planner_node/vp_free_neighbors_min", vp_free_neighbors_min_);
     nh_.getParam("lrae_planner_node/vp_occ_clear_cells", vp_occ_clear_cells_);
     nh_.getParam("lrae_planner_node/goal_min_dis", goal_min_dis_);
@@ -587,10 +588,18 @@ bool ExplorationPlanning::getCentroidHelper(const int ori_x, const int& ori_y, c
 bool ExplorationPlanning::assessUnknownRegion(Centroid* choosecentroid)
 {
     utils_ns::Index2 startpoint = choosecentroid->cenindex;
+    // Each viewpoint costs one full-map A* (SearchforCost).  A large unknown
+    // blob can produce thousands of viewpoints -> 0.4-1.1 s per planning
+    // cycle.  Evaluate an evenly spaced subset (upstream's own purgeViewpoint
+    // capped at 6 but is disabled).
+    int n_vp = (int)choosecentroid->viewpoint_fir.size();
+    int stride = 1;
+    if(max_assess_viewpoints_ > 0 && n_vp > max_assess_viewpoints_)
+        stride = (n_vp + max_assess_viewpoints_ - 1) / max_assess_viewpoints_;
     int max_traver_degree = 0;
     int max_disgridnum = 0;
     double max_rvpathcost = 0.0;
-    for(int i = 0; i < choosecentroid->viewpoint_fir.size(); i++)
+    for(int i = 0; i < n_vp; i += stride)
     {
         utils_ns::Index2 endpoint;
         endpoint.x = choosecentroid->viewpoint_fir[i].indexX;
@@ -892,6 +901,7 @@ void ExplorationPlanning::execute(const ros::TimerEvent&)
     else
     {
         auto begin_time = std::chrono::system_clock::now();
+        route_ms_ = path_ms_ = assess_ms_ = 0.0;
 
         update_cen_count_++;
         if(update_cen_count_ % update_cen_thre_ == 0 || findCenIs_ == false)
@@ -1100,7 +1110,10 @@ void ExplorationPlanning::execute(const ros::TimerEvent&)
             }
             else
             {
+                auto route_t0 = std::chrono::steady_clock::now();
                 orders = getRouteOrder();
+                route_ms_ = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - route_t0).count() / 1000.0;
             }
 
             if(orders.size() <= 1)
@@ -1125,7 +1138,10 @@ void ExplorationPlanning::execute(const ros::TimerEvent&)
                 for(int i = 1; i < orders.size(); i++)
                 {
                     Centroid* current_cen= &centroids_[orders[i] - 1];
-                    bool highIs = assessUnknownRegion(current_cen); // Prioritize exploring the high safety centroids that rank higher in the order. 
+                    auto assess_t0 = std::chrono::steady_clock::now();
+                    bool highIs = assessUnknownRegion(current_cen); // Prioritize exploring the high safety centroids that rank higher in the order.
+                    assess_ms_ += std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - assess_t0).count() / 1000.0; 
                     if(highIs)
                     {
                         findnCen++;
@@ -1289,6 +1305,7 @@ void ExplorationPlanning::execute(const ros::TimerEvent&)
                 // ROS_INFO("Goal is vp");
             }            
 
+            auto path_t0 = std::chrono::steady_clock::now();
             path_planner_.setCentroidPairIndex(centroidone, centroidtwo);
             path_planner_.setPlanMap(global_map_); 
             path_planner_.setRobotPosition(ego_position_);
@@ -1310,6 +1327,8 @@ void ExplorationPlanning::execute(const ros::TimerEvent&)
                     // ROS_WARN("Get c2 path");
                 }
             }
+            path_ms_ = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - path_t0).count() / 1000.0;
             if(!path_published)
             {
                 if(findnCen == 0)
@@ -1332,7 +1351,7 @@ void ExplorationPlanning::execute(const ros::TimerEvent&)
         if(!flag1)
         {
             ROS_WARN("Exploring ... ");
-            // ROS_INFO("Route and path planning time is :  %0.2f  ms", run_time_s);
+            ROS_INFO("[planner] cycle %.1f ms route %.1f path %.1f assess %.1f", run_time_s, route_ms_, path_ms_, assess_ms_);
         }
     }
 }

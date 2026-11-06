@@ -18,7 +18,8 @@ int main(int argc, char** argv)
     ros::NodeHandle nh_private("~");
     ros::Rate rate(2);
     FitPlane::World world(0.1, nh, nh_private);
-    float plane_size = 0.3; // 0.5
+    float plane_size = 0.3;
+    nh_private.param("map_cell_size", plane_size, plane_size);
     FitPlane::PlaneMap planemap(&world, plane_size);
     while(ros::ok())
     {

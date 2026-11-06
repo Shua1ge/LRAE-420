@@ -181,6 +181,10 @@ private:
     bool findCenIs_ = true;
     bool go_home_ = false;
     int go_home_count_ = 0;
+    double route_ms_ = 0.0;
+    double path_ms_ = 0.0;
+    double assess_ms_ = 0.0;
+    int max_assess_viewpoints_ = 12;
 
     // function 
     bool isInBorder(const int& x, const int& y)

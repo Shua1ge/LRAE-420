@@ -58,6 +58,7 @@ class StuckDetector:
         self.cmd_vx = 0.0
         self.cmd_wz = 0.0
         self.cmd_t = None
+        self._last_odom_t = None
         self.map = None
         self.map_res = 0.3
         self.map_ox = 0.0
@@ -81,12 +82,16 @@ class StuckDetector:
         self.cmd_hist.append((self.cmd_t, msg.linear.x, msg.angular.z))
 
     def odom_cb(self, msg):
+        # Sample at 20 Hz: the odometry callback runs at ~370 Hz in sim and
+        # the detector only needs a 5 s position window.
+        now = msg.header.stamp.to_sec()
+        if self._last_odom_t is not None and now - self._last_odom_t < 0.05:
+            return
+        self._last_odom_t = now
         p = msg.pose.pose.position
         q = msg.pose.pose.orientation
-        roll, pitch = rpy_from_quat(q.x, q.y, q.z, q.w)
         self.pose_hist.append((msg.header.stamp.to_sec(), p.x, p.y,
-                               yaw_from_quat(q.x, q.y, q.z, q.w),
-                               p.z, roll, pitch))
+                               q.x, q.y, q.z, q.w, p.z))
 
     def map_cb(self, msg):
         self.map = msg
@@ -138,7 +143,7 @@ class StuckDetector:
             return
         xs = np.array([p[1] for p in window])
         ys = np.array([p[2] for p in window])
-        yaws = np.array([p[3] for p in window])
+        yaws = np.array([yaw_from_quat(p[3], p[4], p[5], p[6]) for p in window])
         disp = math.hypot(xs[-1] - xs[0], ys[-1] - ys[0])
         dyaw = abs(math.atan2(math.sin(yaws[-1] - yaws[0]),
                               math.cos(yaws[-1] - yaws[0])))
@@ -160,8 +165,9 @@ class StuckDetector:
             return
         self.last_event_t = t_now
 
-        x, y, z = xs[-1], ys[-1], window[-1][4]
-        roll, pitch = window[-1][5], window[-1][6]
+        x, y, z = xs[-1], ys[-1], window[-1][7]
+        roll, pitch = rpy_from_quat(window[-1][3], window[-1][4],
+                                    window[-1][5], window[-1][6])
         obs = self.obstacle_ahead(x, y, yaws[-1])
         obs_txt = "none" if obs is None else "%.2f m" % obs
         kind = "spin_stuck" if spin_stuck else "stuck"

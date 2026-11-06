@@ -40,6 +40,32 @@
   <arg name="neighbor_radius_cells" default="1"/>
   <arg name="neighbor_min_eig_ratio" default="0.1"/>
   <arg name="neighbor_max_z_span" default="0.15"/>
+  <arg name="min_occ_hits" default="1"
+       doc="Consecutive occupied observations before a global cell becomes an obstacle; 2 filters transient objects."/>
+  <arg name="merge_size" default="9.0"
+       doc="Only cells within this distance of the robot are fused into the global map.  9 m keeps the map as a ~18 m corridor; raise it to use more of the fitplane local window."/>
+  <arg name="grid_z_below" default="1000000000.0"
+       doc="Voxel grid vertical band below the robot base (metres).  1e9 = upstream (full cloud z extent)."/>
+  <arg name="grid_z_above" default="1000000000.0"/>
+  <arg name="map_cell_size" default="0.3"
+       doc="fitplane plane_OccMap cell size (and therefore globalMap).  0.5 m fills the gaps between ground rings far better on smooth open terrain."/>
+  <arg name="fit_z_half_extent" default="1.0"
+       doc="Vertical half-extent of the plane-fit box. 1.0 = upstream; 0.3 excludes canopy voxels on vegetated ground (slopes up to ~40 deg still fit inside the 0.7 m box)."/>
+  <arg name="fit_ransac" default="false"
+       doc="RANSAC the fit-box voxels (ground = dominant plane, vegetation = outliers)."/>
+  <arg name="occ_dilate" default="false"
+       doc="Dilate obstacles by one 0.3 m cell (upstream). false keeps the map geometric."/>
+  <arg name="occ_dilate_local" default="true"
+       doc="Keep the 0.3 m clearance ring for localPlanner only; the published map stays geometric."/>
+  <arg name="accum_frames" default="1"
+       doc="Fit on the union of the last N clouds (map frame). 3 triples density and removes 3-point planes."/>
+  <arg name="ground_gate_height" default="0.0"
+       doc="Reject fitted cells whose surface is this far above the local median (canopy/roof). 0 disables."/>
+  <arg name="ground_gate_radius_cells" default="3"/>
+  <arg name="ground_gate_min_neighbors" default="5"/>
+  <arg name="fit_ransac_thresh" default="0.05"/>
+  <arg name="fit_ransac_iters" default="40"/>
+  <arg name="fit_ransac_min_ratio" default="0.3"/>
   <arg name="fit_min_points" default="10"/>
   <arg name="fit_radius" default="0.25"/>
   <arg name="use_ex_range" default="true"
@@ -79,8 +105,22 @@
          smooth open plazas only put 5-9 surface voxels in a 0.5 m box and
          every cell would stay unknown.  Campus launch raises the radius and
          lowers the count. -->
+    <param name="grid_z_below" value="$(arg grid_z_below)"/>
+    <param name="grid_z_above" value="$(arg grid_z_above)"/>
+    <param name="map_cell_size" value="$(arg map_cell_size)"/>
+    <param name="fit_z_half_extent" value="$(arg fit_z_half_extent)"/>
+    <param name="fit_ransac" value="$(arg fit_ransac)"/>
+    <param name="fit_ransac_thresh" value="$(arg fit_ransac_thresh)"/>
+    <param name="fit_ransac_iters" value="$(arg fit_ransac_iters)"/>
+    <param name="fit_ransac_min_ratio" value="$(arg fit_ransac_min_ratio)"/>
     <param name="fit_min_points" value="$(arg fit_min_points)"/>
     <param name="fit_radius" value="$(arg fit_radius)"/>
+    <param name="occ_dilate" value="$(arg occ_dilate)"/>
+    <param name="occ_dilate_local" value="$(arg occ_dilate_local)"/>
+    <param name="accum_frames" value="$(arg accum_frames)"/>
+    <param name="ground_gate_height" value="$(arg ground_gate_height)"/>
+    <param name="ground_gate_radius_cells" value="$(arg ground_gate_radius_cells)"/>
+    <param name="ground_gate_min_neighbors" value="$(arg ground_gate_min_neighbors)"/>
     <!-- Experiment C: recover cells whose exact 0.1 m column has no surface
          by fitting the 3x3 neighbouring cell surfaces (0.3 m ring). -->
     <param name="neighbor_recover" value="$(arg neighbor_recover)"/>
@@ -97,8 +137,9 @@
     <param name="map_h" value="$(arg map_height)"/>
     <param name="mapinitox" value="$(arg map_origin_x)"/>
     <param name="mapinitoy" value="$(arg map_origin_y)"/>
-    <param name="merge_size" value="9.0"/>
+    <param name="merge_size" value="$(arg merge_size)"/>
     <param name="init_free_radius" value="$(arg init_free_radius)"/>
+    <param name="min_occ_hits" value="$(arg min_occ_hits)"/>
     <param name="safe_obs_dis" value="1.0"/>
   </node>
 
@@ -141,6 +182,7 @@
     <remap from="/state_estimation" to="/ground_truth/state"/>
     <remap from="/way_point" to="/look_ahead_goal"/>
     <remap from="/terrain_map" to="/local_traversibility_ponit_cloud"/>
+    <remap from="/path" to="/lrae_local_path"/>
 
     <param name="pathFolder" value="$(find local_planner)/paths"/>
     <param name="sensorOffsetX" value="0.0"/>
@@ -189,6 +231,7 @@
         output="screen" required="true"
         launch-prefix="bash -c 'sleep $(arg start_delay); exec $0 $@'">
     <remap from="/state_estimation" to="/ground_truth/state"/>
+    <remap from="/path" to="/lrae_local_path"/>
     <remap from="/cmd_vel" to="/planning/cmd_vel_raw"/>
 
     <param name="sensorOffsetX" value="0.0"/>

@@ -64,12 +64,20 @@ Visualization Manager:
       Value: true
     - Class: rviz/Path
       Enabled: true
-      Name: local_path
+      Name: our_local_path
+      Topic: /lrae_local_path
+      Color: 0; 220; 255
+      Line Style: Lines
+      Line Width: 0.05
+      Value: true
+    - Class: rviz/Path
+      Enabled: false
+      Name: bag_path_reference
       Topic: /path
-      Color: 0; 120; 255
+      Color: 255; 0; 255
       Line Style: Lines
       Line Width: 0.04
-      Value: true
+      Value: false
     - Class: rviz/PointCloud2
       Enabled: true
       Name: mid360_world
@@ -103,6 +111,7 @@ Visualization Manager:
     - Class: rviz/Interact
     - Class: rviz/MoveCamera
     - Class: rviz/Select
+    - Class: rviz/PublishPoint
   Views:
     Current:
       Class: rviz/Orbit

@@ -22,9 +22,9 @@ public:
 
   virtual bool Search(int startX, int startY, int goalX, int goalY, unsigned char** occMap, int width, int height,
                       unsigned char obsthresh, std::vector<utils_ns::PointInt>& path, std::vector<utils_ns::PointInt>& expands, int& pathCost) = 0;
-  virtual bool SearchforCost(int startX, int startY, int goalX, int goalY, nav_msgs::OccupancyGrid occMap, int width, int height,
+  virtual bool SearchforCost(int startX, int startY, int goalX, int goalY, const nav_msgs::OccupancyGrid& occMap, int width, int height,
                      unsigned char obsthresh, int& pathCost, std::vector<utils_ns::PointInt>& path) = 0;
-  virtual bool SearchforNearCen(int startX, int startY, int goalX, int goalY, nav_msgs::OccupancyGrid occMap, int width, int height,
+  virtual bool SearchforNearCen(int startX, int startY, int goalX, int goalY, const nav_msgs::OccupancyGrid& occMap, int width, int height,
                      unsigned char obsthresh, int& pathCost, std::vector<utils_ns::PointInt>& path) = 0;
 };
 

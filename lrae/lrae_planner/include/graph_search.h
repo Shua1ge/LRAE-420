@@ -32,9 +32,9 @@ public:
 
   bool Search(int startX, int startY, int goalX, int goalY, unsigned char** occMap, int width, int height,
               unsigned char obsthresh, std::vector<utils_ns::PointInt>& path, std::vector<utils_ns::PointInt>& expands, int& pathCost);
-  bool SearchforCost(int startX, int startY, int goalX, int goalY, nav_msgs::OccupancyGrid occMap, int width, int height,
+  bool SearchforCost(int startX, int startY, int goalX, int goalY, const nav_msgs::OccupancyGrid& occMap, int width, int height,
                      unsigned char obsthresh, int& pathCost, std::vector<utils_ns::PointInt>& path);
-  bool SearchforNearCen(int startX, int startY, int goalX, int goalY, nav_msgs::OccupancyGrid occMap, int width, int height,
+  bool SearchforNearCen(int startX, int startY, int goalX, int goalY, const nav_msgs::OccupancyGrid& occMap, int width, int height,
                      unsigned char obsthresh, int& pathCost, std::vector<utils_ns::PointInt>& path);
 
 private:
@@ -53,6 +53,12 @@ private:
   void initializeSearchState2D(Grid2DSearchState* state2D);
 
 private:
+  // Reusable closed-set buffer: upstream calloc/free'd width*height bytes
+  // (~1 MB for a 1000x1000 map) on every search, and the planner issues
+  // dozens of searches per 2 Hz cycle.  Only the expanded cells are reset.
+  std::vector<unsigned char> closed_;
+  std::vector<int> closed_touched_;
+
   CIntHeap* openList2D_;
   Grid2DSearchState** searchStates2D_;
   int dx_[8];
