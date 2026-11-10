@@ -1,190 +1,56 @@
-按现有方案：**Ubuntu 22.04 宿主机安装 NVIDIA 驱动、Docker 和 NVIDIA Container Toolkit；ROS1、Gazebo、GO2 策略继续使用原来的容器镜像。** 安装方式依据 [Ubuntu 驱动文档](https://documentation.ubuntu.com/server/how-to/graphics/install-nvidia-drivers/)、[Docker 官方文档](https://docs.docker.com/engine/install/ubuntu/)和 [NVIDIA 容器文档](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)。
+**可以尝试 Qwen3.5-4B。按常见的 11GB 版 2080 Ti，建议先用 NF4 四位量化权重、FP16 计算，单张局部图顺序推理。** 这个方案在硬件支持范围内，但显存、速度和识别效果仍需新电脑实测。[bitsandbytes 官方支持说明](https://huggingface.co/docs/bitsandbytes/v0.50.2/en/installation)
 
-**1．新电脑：安装基础工具和显卡驱动。**
+我已经准备好[新电脑迁移包](/home/t1an/Documents/Codex/2026-11-10/electronic-codex-threads-01a1aef7-f412-7fc0/outputs/Electronic-2080Ti-4B.zip)，里面包含最新本地分支、2080 Ti 兼容补丁、固定依赖版本和完整安装命令。**最新提交 `a89cc95` 尚未推送，单独克隆 GitHub 会缺少上一轮改动。**
 
-```bash
-sudo apt update
+按下面顺序准备即可。
 
-sudo apt install -y \
-  ubuntu-drivers-common linux-headers-$(uname -r) \
-  ca-certificates curl gnupg git rsync \
-  openssh-client openssh-server \
-  build-essential cmake pkg-config \
-  python3 python3-pip python3-venv \
-  mesa-utils x11-xserver-utils xauth \
-  sysstat htop tmux unzip gzip
+1. **安装 Git 和 Python 虚拟环境。** Ubuntu 22.04 自带的 Python 3.10 可以用于包内固定版本。
 
-sudo systemctl enable --now ssh
+   ```bash
+   sudo apt update
+   sudo apt install -y git unzip python3 python3-venv python3-pip
+   nvidia-smi
+   ```
 
-ubuntu-drivers list
-sudo ubuntu-drivers install
-```
+   本方案建议驱动为 `560.35.05` 或更新，以覆盖 CUDA 12.6 运行库；如果已经更新，就保留当前驱动。[NVIDIA 版本说明](https://docs.nvidia.com/cuda/archive/12.6.3/cuda-toolkit-release-notes/)
 
-**2．新电脑：安装 Docker。**
+2. **解压迁移包，恢复代码并应用补丁。** 在解压后的 `Electronic-2080Ti-4B` 文件夹中执行：
 
-```bash
-sudo install -m 0755 -d /etc/apt/keyrings
+   ```bash
+   git clone -b feature/unified-drawing-review-20261106 ./Electronic.bundle ./Electronic
+   cd Electronic
+   git apply ../2080ti-4b.patch
+   ```
 
-sudo curl -fsSL \
-  https://download.docker.com/linux/ubuntu/gpg \
-  -o /etc/apt/keyrings/docker.asc
+   原代码写死了 BF16，补丁将其改为适合 2080 Ti 的 FP16，并把默认模型改为 4B。
 
-sudo chmod a+r /etc/apt/keyrings/docker.asc
+3. **创建环境，安装 CUDA 版 PyTorch 和项目依赖。**
 
-sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
-Types: deb
-URIs: https://download.docker.com/linux/ubuntu
-Suites: jammy
-Components: stable
-Architectures: $(dpkg --print-architecture)
-Signed-By: /etc/apt/keyrings/docker.asc
-EOF
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   python -m pip install --upgrade pip
+   python -m pip install torch==2.14.0 torchvision==0.29.0 \
+     --index-url https://download.pytorch.org/whl/cu126
+   python -m pip install -r ../requirements-ubuntu.txt
+   python -m pip check
+   ```
 
-sudo apt update
+   依赖包括 Transformers、Accelerate、bitsandbytes、PyMuPDF、Pillow、OpenCV 和 openpyxl。这个 PyTorch／torchvision 组合来自[官方安装说明](https://pytorch.org/get-started/previous-versions/)。**不要运行 `uv sync` 或 `pip install -e .`，仓库的 `pyproject.toml` 仍面向 macOS／MLX。**
 
-sudo apt install -y \
-  docker-ce docker-ce-cli containerd.io \
-  docker-buildx-plugin docker-compose-plugin
+4. **下载多模态 4B 模型，再做小规模测试。**
 
-sudo systemctl enable --now docker
-sudo usermod -aG docker "$USER"
-```
+   ```bash
+   hf download Qwen/Qwen3.5-4B
 
-**3．新电脑：安装 GPU 容器运行时、分析工具，然后重启。**
+   python scripts/drawing_pipeline.py /你的路径/图纸.pdf \
+     --output ./runs/4b-smoke-01 \
+     --model-id Qwen/Qwen3.5-4B \
+     --max-calls 5 --serve
+   ```
 
-```bash
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey |
-  sudo gpg --dearmor --yes \
-    -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+   下载的是[官方多模态模型](https://huggingface.co/Qwen/Qwen3.5-4B)，程序加载时再进行 NF4 量化。打开终端给出的本地复核地址；确认没有显存或模型调用错误后，换一个输出目录，去掉 `--max-calls 5` 跑完整图纸。
 
-curl -fsSL \
-  https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list |
-  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' |
-  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list >/dev/null
+这条流程使用预编译包，**暂时无需另装系统 CUDA Toolkit、cuDNN、Docker、Ollama 或 vLLM，也先别装 `flash-attn`**。Tesseract 中文 OCR 只在继续使用旧 Fast 的独立 OCR 功能时需要。
 
-sudo apt update
-sudo apt install -y nvidia-container-toolkit
-
-sudo nvidia-ctk runtime configure --runtime=docker
-sudo systemctl restart docker
-
-python3 -m venv "$HOME/.venvs/lrae-tools"
-
-"$HOME/.venvs/lrae-tools/bin/python" -m pip install --upgrade pip
-
-"$HOME/.venvs/lrae-tools/bin/python" -m pip install \
-  numpy scipy matplotlib PyYAML psutil rosbags pillow
-
-sudo reboot
-```
-
-重启后，在**新电脑的图形桌面终端**执行：
-
-```bash
-nvidia-smi
-glxinfo -B
-docker version
-
-source "$HOME/.venvs/lrae-tools/bin/activate"
-```
-
-**4．旧电脑：导出现有 ROS1 镜像。这个镜像是本地构建的，不能直接通过 `docker pull` 获取。**
-
-```bash
-sudo apt install -y openssh-server rsync
-sudo systemctl enable --now ssh
-
-docker image inspect gbplanner_ros1_go2:gpu >/dev/null
-
-docker save gbplanner_ros1_go2:gpu |
-  gzip -1 > "$HOME/gbplanner_ros1_go2_gpu.tar.gz"
-
-hostname -I
-```
-
-**5．新电脑：输入旧电脑的 SSH 地址，迁移镜像、工作区和场景。**
-
-```bash
-read -r -p '旧电脑SSH地址，例如 t1an@192.168.31.100：' LRAE_OLD_HOST
-
-mkdir -p \
-  "$HOME/lrae_transfer" \
-  "$HOME/lrae_underlay/ws" \
-  "$HOME/lrae_experiments" \
-  "$HOME/World/njupt_gazebo_optimized"
-
-rsync -avP \
-  "${LRAE_OLD_HOST}:gbplanner_ros1_go2_gpu.tar.gz" \
-  "$HOME/lrae_transfer/"
-
-gzip -dc "$HOME/lrae_transfer/gbplanner_ros1_go2_gpu.tar.gz" |
-  docker load
-
-# 仿真底层：保留 devel，当前入口需要其中的已构建依赖。
-rsync -avP \
-  --exclude='build/' \
-  --exclude='logs/' \
-  "${LRAE_OLD_HOST}:/home/t1an/lrae_overnight_ws/legged_exploration_bench/env/ros1_noetic/ws/" \
-  "$HOME/lrae_underlay/ws/"
-
-# Campus 场景。
-rsync -avP \
-  "${LRAE_OLD_HOST}:/home/t1an/World/njupt_gazebo_optimized/" \
-  "$HOME/World/njupt_gazebo_optimized/"
-
-# 本地实验改版；不复制旧运行日志和改版编译产物。
-rsync -avP \
-  --exclude='**/node_modules/' \
-  --exclude='**/workspace/build/' \
-  --exclude='**/workspace/devel/' \
-  --exclude='**/workspace/install/' \
-  --exclude='**/runs/' \
-  --exclude='/work/audit-report/' \
-  "${LRAE_OLD_HOST}:/home/t1an/Documents/Codex/2026-11-06/https-github-com-shua1ge-lrae-420/" \
-  "$HOME/lrae_experiments/"
-
-# 实机录制 bag。
-mkdir -p "$HOME/lrae_data"
-
-rsync -avP \
-  "${LRAE_OLD_HOST}:/home/t1an/legged_exploration_bench/data/go2_20261105_150024.bag" \
-  "$HOME/lrae_data/"
-```
-
-**6．新电脑：检查容器，重新编译并启动已验证的 V7 基准。**
-
-```bash
-source "$HOME/.venvs/lrae-tools/bin/activate"
-
-export SIM_UNDERLAY="$HOME/lrae_underlay/ws"
-export WORLD_DIR="$HOME/World/njupt_gazebo_optimized"
-export IMAGE="gbplanner_ros1_go2:gpu"
-export LRAE_PROJECT="$HOME/lrae_experiments"
-
-docker run --rm --gpus all "$IMAGE" nvidia-smi
-
-docker run --rm "$IMAGE" bash -lc \
-  'source /opt/ros/noetic/setup.bash; rosversion -d; gazebo --version'
-
-test -f \
-  "$SIM_UNDERLAY/devel/.private/catkin_tools_prebuild/setup.bash"
-
-test -d "$WORLD_DIR/models/njupt_xianlin_optimized"
-
-ACTION=build \
-  bash "$LRAE_PROJECT/outputs/reverse-v7-20261110/run_sim.sh"
-```
-
-Campus，打开 RViz 和 Gazebo，运行 12 分钟：
-
-```bash
-SCENE=campus GUI=1 GAZEBO_GUI=1 DURATION=720 \
-  bash "$LRAE_PROJECT/outputs/reverse-v7-20261110/run_sim.sh"
-```
-
-NewMine：
-
-```bash
-SCENE=newmine GUI=1 GAZEBO_GUI=1 DURATION=720 \
-  bash "$LRAE_PROJECT/outputs/reverse-v7-20261110/run_sim.sh"
-```
+迁移补丁已通过 **22 项离线测试**；还没有在 2080 Ti 上运行 4B。完整命令和检查方法也可单独查看[安装说明](/home/t1an/Documents/Codex/2026-11-10/electronic-codex-threads-01a1aef7-f412-7fc0/outputs/Electronic-2080Ti-4B-安装说明.txt)。模型权重、工程 PDF 和旧复核结果需要另外下载或复制。
