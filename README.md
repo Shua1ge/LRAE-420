@@ -21,6 +21,8 @@ Q. Bi, X. Zhang, S. Zhang, R. Wang, L. Li and J. Yuan, "LRAE: Large-Region-Aware
 
 ### A. Gazebo 校园仿真
 
+GO2 策略、Campus world、完整模型下载和校验步骤见[仿真底层资源](docs/campus-assets/README.md)。
+
 ```bash
 roslaunch lrae_go2 lrae_go2_campus.launch gui:=true rviz:=true \
   mid360_sensor_type:=gpu_ray

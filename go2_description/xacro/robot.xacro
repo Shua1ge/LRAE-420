@@ -1,0 +1,213 @@
+<?xml version="1.0"?>
+
+<robot name="go2" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <xacro:property name="mid360" value="${xacro.load_yaml('$(find go2_description)/config/mid360.yaml')}"/>
+
+    <xacro:arg name="DEBUG" default="false"/>
+    <xacro:arg name="use_gazebo" default="true"/>
+    <xacro:arg name="terrain_velocity_control" default="false"/>
+    <!-- Lock the 12 leg joints at the nominal stance and drop every leg
+         controller.  Used by the kinematic proxy mode, where the trunk is held
+         rigidly at the spawn height by the model itself: leg dynamics must not
+         decide the body height, because the local map trusts the LiDAR pose. -->
+    <xacro:arg name="lock_legs" default="false"/>
+    <xacro:arg name="use_sensor_head" default="false"/>
+    <xacro:arg name="use_nearfield" default="false"/>
+    <xacro:arg name="use_mid360" default="true"/>
+    <xacro:arg name="mid360_h_samples" default="625"/>
+    <xacro:arg name="mid360_v_samples" default="32"/>
+    <xacro:arg name="mid360_sensor_type" default="ray"/>
+    <xacro:arg name="mid360_plugin" default="gazebo_ros_lidar"/>
+    <xacro:arg name="use_d435" default="true"/>
+
+    <xacro:include filename="$(find go2_description)/xacro/const.xacro"/>
+    <xacro:include filename="$(find go2_description)/xacro/materials.xacro"/>
+    <xacro:include filename="$(find go2_description)/xacro/leg.xacro"/>
+    <xacro:include filename="$(find go2_description)/xacro/gazebo_ros1.xacro"/>
+    <xacro:include filename="$(find smb_description)/urdf/sensor_head.urdf.xacro"/>
+    <xacro:include filename="$(find go2_description)/xacro/nearfield.xacro"/>
+    <xacro:include filename="$(find go2_description)/urdf/_d435.urdf.xacro"/>
+    <!-- <xacro:include filename="$(find go2_gazebo)/launch/stairs.urdf.xacro"/> -->
+
+    <!-- <xacro:stairs stairs="15" xpos="0" ypos="0" zpos="0" /> -->
+
+    <!-- Rotor related joint and link is only for demonstrate location. -->
+    <!-- Actually, the rotor will rotate and the joint is not fixed. Reduction ratio should be considered. -->
+
+    <!-- Debug mode will hung up the robot, use "true" or "false" to switch it. -->
+    <xacro:if value="$(arg DEBUG)">
+        <link name="world"/>
+        <joint name="base_static_joint" type="fixed">
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <parent link="world"/>
+            <child link="base"/>
+        </joint>
+    </xacro:if> 
+
+    <link name="base">
+        <visual>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <geometry>
+                <box size="0.001 0.001 0.001"/>
+            </geometry>
+        </visual>
+    </link>
+
+    <joint name="floating_base" type="fixed">
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+        <parent link="base"/>
+        <child link="trunk"/>
+    </joint>
+
+    <link name="trunk">
+        <visual>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <geometry>
+                <mesh filename="package://go2_description/meshes/base.dae" scale="1 1 1"/>
+            </geometry>
+            <!-- <material name="orange"/> -->
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <geometry>
+                <box size="${trunk_length} ${trunk_width} ${trunk_height}"/>
+            </geometry>
+        </collision>
+        <inertial>
+            <origin rpy="0 0 0" xyz="${trunk_com_x} ${trunk_com_y} ${trunk_com_z}"/>
+            <mass value="${trunk_mass}"/>
+            <inertia
+                ixx="${trunk_ixx}" ixy="${trunk_ixy}" ixz="${trunk_ixz}"
+                iyy="${trunk_iyy}" iyz="${trunk_iyz}"
+                izz="${trunk_izz}"/>  
+        </inertial>
+    </link>
+
+    <joint name="imu_joint" type="fixed">
+        <parent link="trunk"/>
+        <child link="imu_link"/>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+    </joint>
+
+    <link name="imu_link">
+        <inertial>
+            <mass value="0.001"/>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+        </inertial>
+        <visual>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <geometry>
+                <box size="0.001 0.001 0.001"/>
+            </geometry>
+            <!-- <material name="red"/> -->
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <geometry>
+                <box size=".001 .001 .001"/>
+            </geometry>
+        </collision>
+    </link>
+
+    <joint name="front_camera_joint" type="fixed">
+        <parent link="trunk"/>
+        <child link="front_camera"/>
+        <origin rpy="0 0 0" xyz="0.32715 -0.00003 0.04297"/>
+    </joint>
+
+    <link name="front_camera">
+    </link>
+
+    <joint name="lidar_joint" type="fixed">
+        <parent link="trunk"/>
+        <child link="lidar_link"/>
+        <!-- Unitree kit is pitched down 13deg. Keep TF and both mappers
+             on the same profile; sensor-local elevation remains -7..52deg. -->
+        <origin rpy="${mid360.mount.roll} ${mid360.mount.pitch} ${mid360.mount.yaw}"
+                xyz="${mid360.mount.x} ${mid360.mount.y} ${mid360.mount.z}"/>
+    </joint>
+
+    <link name="lidar_link">
+        <visual>
+            <geometry><cylinder radius="0.035" length="0.045"/></geometry>
+            <material name="lidar_dark_grey"><color rgba="0.12 0.12 0.12 1"/></material>
+        </visual>
+        <collision>
+            <geometry><cylinder radius="0.035" length="0.045"/></geometry>
+        </collision>
+        <inertial>
+            <mass value="0.05"/>
+            <inertia ixx="0.0001" ixy="0" ixz="0"
+                     iyy="0.0001" iyz="0" izz="0.0001"/>
+        </inertial>
+    </link>
+
+    <!--
+    <joint name="load_joint" type="fixed">
+        <parent link="trunk"/>
+        <child link="load_link"/>
+        <origin rpy="0 0 0" xyz="0 0 0"/>
+    </joint>
+
+    <link name="load_link">
+        <inertial>
+            <mass value="5"/>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/>
+        </inertial>
+        <visual>
+            <origin rpy="0 0 0" xyz="0 0 0.2"/>
+            <geometry>
+                <box size="0.5 0.3 0.2"/>
+            </geometry>
+        </visual>
+        <collision>
+            <origin rpy="0 0 0" xyz="0 0 0"/>
+            <geometry>
+                <box size=".001 .001 .001"/>
+            </geometry>
+        </collision>
+    </link>
+-->
+    <!-- Stance angles matching DEFAULT_DOF_POS in the locomotion supervisor:
+         hip 0.1 (mirrored per side), thigh 0.8 front / 1.0 rear, calf -1.5. -->
+    <xacro:leg name="FR" mirror="-1" mirror_dae= "False" front_hind="1"  front_hind_dae="True"
+               lock_legs="$(arg lock_legs)" hip_lock="${-0.1}" thigh_lock="0.8" calf_lock="-1.5" />
+    <xacro:leg name="FL" mirror="1"  mirror_dae="True"   front_hind="1"  front_hind_dae="True"
+               lock_legs="$(arg lock_legs)" hip_lock="${0.1}" thigh_lock="0.8" calf_lock="-1.5" />
+    <xacro:leg name="RR" mirror="-1" mirror_dae="False"  front_hind="-1" front_hind_dae="False"
+               lock_legs="$(arg lock_legs)" hip_lock="${-0.1}" thigh_lock="1.0" calf_lock="-1.5" />
+    <xacro:leg name="RL" mirror="1"  mirror_dae="True"   front_hind="-1" front_hind_dae="False"
+               lock_legs="$(arg lock_legs)" hip_lock="${0.1}" thigh_lock="1.0" calf_lock="-1.5" />
+
+    <!-- Optional 3D lidar pair for GBPlanner2.  The policy itself is blind and
+         does not consume these topics.  Keep the ROS 2 MID-360 geometry as TF,
+         but use the ROS 1 VLP-16 + front OS1-64 plugins for the planner. -->
+    <xacro:if value="$(arg use_sensor_head)">
+        <xacro:sensor_head parent="trunk" name="sensor_head">
+            <origin xyz="0.0 0.0 0.50" rpy="0 0 0"/>
+        </xacro:sensor_head>
+    </xacro:if>
+
+    <xacro:if value="$(arg use_nearfield)">
+        <xacro:go2_nearfield parent="trunk"/>
+    </xacro:if>
+
+    <xacro:if value="$(arg use_d435)">
+        <xacro:sensor_d435 name="camera" topics_ns="camera" parent="trunk"
+                           publish_pointcloud="true">
+            <origin xyz="0.32715 -0.00003 0.04297" rpy="0 0.35 0"/>
+        </xacro:sensor_d435>
+    </xacro:if>
+
+    <xacro:if value="$(arg use_gazebo)">
+        <xacro:unless value="$(arg lock_legs)">
+            <xacro:go2_ros1_control/>
+            <xacro:if value="$(arg use_mid360)">
+                <xacro:go2_mid360_sensor/>
+            </xacro:if>
+        </xacro:unless>
+    </xacro:if>
+</robot>

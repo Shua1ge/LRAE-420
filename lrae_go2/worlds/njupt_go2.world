@@ -1,0 +1,47 @@
+<?xml version='1.0' encoding='utf-8'?>
+<!-- Bench copy of ~/World/njupt_gazebo_optimized/worlds/njupt_xianlin_optimized.world
+     Differences for the Go2 + LRAE stack:
+       - physics 2 ms / 500 Hz (original: 1 ms / 1000 Hz) to match the
+         validated NewMine robot dynamics and halve physics cost
+       - GUI camera framed on the library entrance plaza spawn point
+     The scene model is unchanged and resolved via GAZEBO_MODEL_PATH. -->
+<sdf version="1.6">
+  <world name="njupt_xianlin_optimized">
+    <gravity>0 0 -9.81</gravity>
+    <physics name="ode" type="ode">
+      <max_step_size>0.002</max_step_size>
+      <real_time_update_rate>500</real_time_update_rate>
+      <real_time_factor>1</real_time_factor>
+      <ode>
+        <solver>
+          <type>quick</type>
+          <iters>40</iters>
+        </solver>
+        <constraints>
+          <contact_surface_layer>0.001</contact_surface_layer>
+        </constraints>
+      </ode>
+    </physics>
+    <scene>
+      <ambient>0.65 0.65 0.65 1</ambient>
+      <background>0.69 0.80 0.91 1</background>
+      <shadows>false</shadows>
+    </scene>
+    <light name="sun" type="directional">
+      <cast_shadows>true</cast_shadows>
+      <diffuse>0.85 0.85 0.82 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.3 -0.9</direction>
+      <pose>0 0 100 0 0 0</pose>
+    </light>
+    <include>
+      <uri>model://njupt_xianlin_optimized</uri>
+    </include>
+    <gui fullscreen="0">
+      <camera name="user_camera">
+        <pose>165.8 -265.4 8.3 0 0.218 0.785</pose>
+        <view_controller>orbit</view_controller>
+      </camera>
+    </gui>
+  </world>
+</sdf>

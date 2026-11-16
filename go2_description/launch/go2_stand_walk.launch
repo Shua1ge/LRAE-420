@@ -1,0 +1,113 @@
+<launch>
+  <arg name="gui" default="false"/>
+  <arg name="use_sensor_head" default="false"/>
+  <arg name="use_nearfield" default="false"/>
+  <arg name="use_mid360" default="true"/>
+  <arg name="use_d435" default="true"/>
+  <arg name="use_filter" default="false"/>
+  <arg name="world" default="$(find gazebo_ros)/worlds/empty.world"/>
+  <arg name="x" default="0.0"/>
+  <arg name="y" default="0.0"/>
+  <arg name="z" default="0.55"/>
+  <arg name="yaw" default="0.0"/>
+  <arg name="mid360_h_samples" default="625"
+       doc="MID360 CPU-ray horizontal samples.  Lower (e.g. 225) for large
+            collision-heavy worlds where CPU ray casting is the RTF bottleneck."/>
+  <arg name="mid360_v_samples" default="32"/>
+  <arg name="mid360_sensor_type" default="ray"
+       doc="ray = CPU ray casting; gpu_ray = OGRE GPU rays (needs --gpus all)."/>
+  <arg name="mid360_plugin" default="gazebo_ros_lidar"
+       doc="gazebo_ros_lidar (CPU) or gazebo_ros_gpu_laser (GPU)."/>
+
+  <param name="use_sim_time" value="true"/>
+  <param name="robot_description"
+         command="$(find xacro)/xacro --inorder
+                  '$(find go2_description)/xacro/robot.xacro'
+                  use_gazebo:=true
+                  use_sensor_head:=$(arg use_sensor_head)
+                  use_nearfield:=$(arg use_nearfield)
+                  use_mid360:=$(arg use_mid360)
+                  use_d435:=$(arg use_d435)
+                  mid360_h_samples:=$(arg mid360_h_samples)
+                  mid360_v_samples:=$(arg mid360_v_samples)
+                  mid360_sensor_type:=$(arg mid360_sensor_type)
+                  mid360_plugin:=$(arg mid360_plugin)
+                  lock_legs:=false"/>
+
+  <include file="$(find gazebo_ros)/launch/empty_world.launch">
+    <arg name="world_name" value="$(arg world)"/>
+    <arg name="paused" value="false"/>
+    <arg name="use_sim_time" value="true"/>
+    <arg name="gui" value="$(arg gui)"/>
+    <arg name="headless" value="false"/>
+    <arg name="debug" value="false"/>
+  </include>
+
+  <rosparam command="load" file="$(find go2_description)/config/go2_control.yaml"/>
+
+  <!-- GBPlanner2 consumes one point cloud topic.  The SMB sensor head
+       publishes a 360-degree VLP-16 and a down-pitched front OS1-64; relay
+       both so the near-ground blind zone is covered. -->
+  <group if="$(arg use_nearfield)">
+    <node pkg="topic_tools" type="relay" name="nearfield_relay"
+          args="/nearfield_points /input_pointcloud"/>
+  </group>
+  <group if="$(arg use_mid360)">
+    <group if="$(arg use_filter)">
+      <node pkg="go2_description" type="mid360_filter.py"
+            name="mid360_filter" output="screen">
+        <param name="nominal_body_height" value="0.33"/>
+        <param name="self_radius" value="0.25"/>
+        <param name="self_offset" value="0.18"/>
+        <param name="self_z_down" value="0.45"/>
+        <param name="self_z_up" value="0.20"/>
+        <param name="low_below_body" value="0.25"/>
+        <param name="high_above_body" value="0.25"/>
+        <param name="ground_band" value="0.035"/>
+        <param name="obstacle_min" value="0.22"/>
+        <param name="obstacle_max" value="0.55"/>
+        <param name="no_return_range" value="3.0"/>
+      </node>
+    </group>
+    <group unless="$(arg use_filter)">
+      <node pkg="topic_tools" type="relay" name="mid360_raw_relay"
+            args="/mid360_points /input_pointcloud"/>
+    </group>
+  </group>
+  <group if="$(arg use_d435)">
+    <group unless="$(arg use_filter)">
+      <node pkg="topic_tools" type="relay" name="d435_raw_relay"
+            args="/camera/depth/color/points /input_pointcloud"/>
+    </group>
+  </group>
+  <group if="$(arg use_sensor_head)">
+    <node pkg="topic_tools" type="relay" name="vlp_relay"
+          args="/velodyne_points /input_pointcloud"/>
+    <node pkg="topic_tools" type="relay" name="front_lidar_relay"
+          args="/lidar_front_points /input_pointcloud"/>
+  </group>
+
+  <node name="spawn_go2" pkg="gazebo_ros" type="spawn_model"
+        args="-x $(arg x) -y $(arg y) -z $(arg z) -Y $(arg yaw)
+              -urdf -param robot_description -model go2"
+        output="screen"/>
+  <node name="robot_state_publisher" pkg="robot_state_publisher"
+        type="robot_state_publisher" output="screen"/>
+  <node name="go2_ground_truth_tf" pkg="go2_description"
+        type="ground_truth_tf.py" output="screen"/>
+  <node name="go2_controller_loader" pkg="go2_description"
+        type="load_go2_controllers.py" output="screen"/>
+  <node name="go2_policy_node" pkg="go2_description"
+        type="go2_policy_node.py" output="screen">
+    <param name="model_path"
+           value="$(find go2_description)/models/go2_rl_lab_policy.pt"/>
+    <param name="kp" value="25.0"/>
+    <param name="kd" value="0.5"/>
+    <param name="action_scale" value="0.25"/>
+    <param name="policy_rate" value="50.0"/>
+    <param name="control_rate" value="500.0"/>
+    <param name="torch_threads" value="1"/>
+    <rosparam param="command_scale">[0.5, 1.0, 1.0]</rosparam>
+    <rosparam param="command_limits">[2.0, 1.0, 3.0]</rosparam>
+  </node>
+</launch>

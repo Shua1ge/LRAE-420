@@ -1,0 +1,133 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- ROS 1 / Gazebo Classic hardware interface.  The ROS 2 model uses
+       gz_ros2_control; this file intentionally does not include any Ignition
+       plugin.  The effort command order is the leg-major policy order. -->
+  <!-- gazebo_ros_control derives its hardware interfaces from URDF
+       transmissions.  Without these the effort controller sees no resources. -->
+  <xacro:macro name="go2_transmission" params="joint">
+    <transmission name="${joint}_transmission">
+      <type>transmission_interface/SimpleTransmission</type>
+      <joint name="${joint}">
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+      </joint>
+      <actuator name="${joint}_motor">
+        <hardwareInterface>hardware_interface/EffortJointInterface</hardwareInterface>
+        <mechanicalReduction>1</mechanicalReduction>
+      </actuator>
+    </transmission>
+  </xacro:macro>
+
+  <!-- MID360 geometry/coverage approximation.  The real Livox sensor has a
+       non-repetitive scan; Gazebo Classic uses the available 3D ray raster.
+       Mount and vertical FOV follow config/mid360.yaml. -->
+  <xacro:macro name="go2_mid360_sensor">
+    <gazebo reference="lidar_link">
+      <sensor name="mid360" type="$(arg mid360_sensor_type)">
+        <always_on>true</always_on>
+        <visualize>false</visualize>
+        <update_rate>10</update_rate>
+        <ray>
+          <scan>
+            <horizontal>
+              <samples>$(arg mid360_h_samples)</samples>
+              <resolution>1</resolution>
+              <min_angle>-3.141592653589793</min_angle>
+              <max_angle>3.141592653589793</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>$(arg mid360_v_samples)</samples>
+              <resolution>1</resolution>
+              <min_angle>-0.12217304763960307</min_angle>
+              <max_angle>0.9075712110370514</max_angle>
+            </vertical>
+          </scan>
+          <range><min>0.1</min><max>40.0</max><resolution>0.01</resolution></range>
+        </ray>
+        <plugin name="mid360_lidar" filename="lib$(arg mid360_plugin).so">
+          <topicName>mid360_points</topicName>
+          <frameName>lidar_link</frameName>
+          <min_range>0.1</min_range>
+          <max_range>40.0</max_range>
+          <gaussianNoise>0.005</gaussianNoise>
+        </plugin>
+      </sensor>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:macro name="go2_ros1_control">
+    <xacro:go2_transmission joint="FL_hip_joint"/>
+    <xacro:go2_transmission joint="FL_thigh_joint"/>
+    <xacro:go2_transmission joint="FL_calf_joint"/>
+    <xacro:go2_transmission joint="FR_hip_joint"/>
+    <xacro:go2_transmission joint="FR_thigh_joint"/>
+    <xacro:go2_transmission joint="FR_calf_joint"/>
+    <xacro:go2_transmission joint="RL_hip_joint"/>
+    <xacro:go2_transmission joint="RL_thigh_joint"/>
+    <xacro:go2_transmission joint="RL_calf_joint"/>
+    <xacro:go2_transmission joint="RR_hip_joint"/>
+    <xacro:go2_transmission joint="RR_thigh_joint"/>
+    <xacro:go2_transmission joint="RR_calf_joint"/>
+    <gazebo>
+      <plugin name="gazebo_ros_control" filename="libgazebo_ros_control.so">
+        <robotNamespace>/</robotNamespace>
+        <robotParam>robot_description</robotParam>
+        <robotSimType>gazebo_ros_control/DefaultRobotHWSim</robotSimType>
+      </plugin>
+
+      <!-- The policy and the planner both need a moving world -> base transform.
+           The plugin publishes odometry; ground_truth_tf.py turns it into TF. -->
+      <plugin name="p3d_base_controller" filename="libgazebo_ros_p3d.so">
+        <alwaysOn>true</alwaysOn>
+        <updateRateHZ>50.0</updateRateHZ>
+        <bodyName>base</bodyName>
+        <topicName>ground_truth/state</topicName>
+        <gaussianNoise>0.0</gaussianNoise>
+        <frameName>world</frameName>
+        <xyzOffsets>0 0 0</xyzOffsets>
+        <rpyOffsets>0 0 0</rpyOffsets>
+      </plugin>
+    </gazebo>
+
+    <gazebo reference="imu_link">
+      <sensor name="imu_sensor" type="imu">
+        <always_on>true</always_on>
+        <update_rate>200</update_rate>
+        <plugin filename="libgazebo_ros_imu_sensor.so" name="imu_plugin">
+          <updateRateHZ>200.0</updateRateHZ>
+          <topicName>go2/imu</topicName>
+          <bodyName>imu_link</bodyName>
+          <frameName>imu_link</frameName>
+          <initialOrientationAsReference>false</initialOrientationAsReference>
+        </plugin>
+        <imu>
+          <angular_velocity>
+            <x><noise type="gaussian"><mean>0.0</mean><stddev>0.0002</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0.0</mean><stddev>0.0002</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0.0</mean><stddev>0.0002</stddev></noise></z>
+          </angular_velocity>
+          <linear_acceleration>
+            <x><noise type="gaussian"><mean>0.0</mean><stddev>0.002</stddev></noise></x>
+            <y><noise type="gaussian"><mean>0.0</mean><stddev>0.002</stddev></noise></y>
+            <z><noise type="gaussian"><mean>0.0</mean><stddev>0.002</stddev></noise></z>
+          </linear_acceleration>
+        </imu>
+      </sensor>
+    </gazebo>
+
+    <!-- Keep the learned stance's contact friction close to the training
+         plant.  The policy's PD is the only active damping contract. -->
+    <gazebo reference="FL_foot">
+      <mu1>0.6</mu1><mu2>0.6</mu2><kp>1000000.0</kp><kd>1.0</kd>
+    </gazebo>
+    <gazebo reference="FR_foot">
+      <mu1>0.6</mu1><mu2>0.6</mu2><kp>1000000.0</kp><kd>1.0</kd>
+    </gazebo>
+    <gazebo reference="RL_foot">
+      <mu1>0.6</mu1><mu2>0.6</mu2><kp>1000000.0</kp><kd>1.0</kd>
+    </gazebo>
+    <gazebo reference="RR_foot">
+      <mu1>0.6</mu1><mu2>0.6</mu2><kp>1000000.0</kp><kd>1.0</kd>
+    </gazebo>
+  </xacro:macro>
+</robot>

@@ -12,6 +12,10 @@ catkin_install_python(PROGRAMS
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
-install(DIRECTORY launch
+install(DIRECTORY launch config worlds
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+)
+
+install(PROGRAMS scripts/go2_mount_description.py
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/scripts
 )

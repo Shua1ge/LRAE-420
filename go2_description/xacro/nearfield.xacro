@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <!-- Short-range downward 3D lidar.  The depth-camera path depends on OGRE
+       rendering and did not publish in headless Gazebo Classic; this CPU ray
+       sensor uses the same VLP-16 model already exercised by the SMB bench.
+       It is pitched down to carve the near-body volume below the main lidar
+       plane, which is otherwise unknown to GBPlanner2. -->
+  <xacro:include filename="$(find lidar_description)/urdf/VLP-16.urdf.xacro"/>
+
+  <xacro:macro name="go2_nearfield" params="parent:=trunk">
+    <joint name="nearfield_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="nearfield_link"/>
+      <origin xyz="0.25 0.0 0.55" rpy="0 1.57079632679 0"/>
+    </joint>
+
+    <link name="nearfield_link">
+      <collision>
+        <geometry><box size="0.035 0.035 0.055"/></geometry>
+      </collision>
+      <visual>
+        <geometry><box size="0.035 0.035 0.055"/></geometry>
+        <material name="nearfield_dark"><color rgba="0.05 0.05 0.05 1"/></material>
+      </visual>
+      <inertial>
+        <mass value="0.001"/>
+        <inertia ixx="1e-6" ixy="0" ixz="0" iyy="1e-6" iyz="0" izz="1e-6"/>
+      </inertial>
+    </link>
+
+    <xacro:VLP-16 parent="nearfield_link" name="nearfield"
+                  topic="nearfield_points" hz="10" samples="220"
+                  gpu="false" collision_range="0.2" min_range="0.2">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </xacro:VLP-16>
+  </xacro:macro>
+</robot>

@@ -1,0 +1,9 @@
+# Reference for the official internal-IMU -> MID360 mounting extrinsic.
+# The local trunk visual/leg origin corresponds to official GO2 URDF base.
+# Keep the existing policy IMU proxy independent of this installation frame.
+# https://github.com/unitreerobotics/unitree_ros/blob/master/robots/go2_description/urdf/go2_description.urdf
+# Official URDF blob: 70bce96b3e96a1c4cf5eeb1753bbd4351c9122e4, imu_joint.
+parent: trunk
+frame: go2_body_imu_reference
+xyz: [-0.02557, 0.0, 0.04232]
+rpy: [0.0, 0.0, 0.0]
